@@ -3,3 +3,5 @@
 
 .idea/
 /wfdd_videos/
+
+__pycache__/
