@@ -10,7 +10,7 @@ class GLASS_onnx(torch.nn.Module):
     def __init__(self):
         super(GLASS_onnx, self).__init__()
         self.backbone = models.wide_resnet50_2(pretrained=False).cuda()
-        self.backbone.load_state_dict(torch.load('/root/.cache/torch/hub/checkpoints/wide_resnet50_2-95faca4d.pth', map_location='cuda'))
+        self.backbone.load_state_dict(torch.load('/home/arif/.cache/torch/hub/checkpoints/wide_resnet50_2-95faca4d.pth', map_location='cuda'))
         self.glass = GLASS('cuda')
         self.glass.load(self.backbone, ["layer2", "layer3"],
                         'cuda', (3, 288, 288), 1536, 1536)

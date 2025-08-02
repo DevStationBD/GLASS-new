@@ -1,5 +1,5 @@
-datapath=/root/cqy/dataset/WFDD
-augpath=/root/cqy/dataset/dtd/images
+datapath=/home/arif/Projects/GLASS-new/datasets/WFDD
+augpath=/home/arif/Projects/GLASS-new/datasets/dtd/images
 classes=('grey_cloth' 'grid_cloth' 'yellow_cloth' 'pink_flower')
 flags=($(for class in "${classes[@]}"; do echo '-d '"${class}"; done))
 
