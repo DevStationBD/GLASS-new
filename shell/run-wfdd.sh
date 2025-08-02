@@ -1,6 +1,8 @@
 datapath=/home/arif/Projects/GLASS-new/datasets/WFDD
 augpath=/home/arif/Projects/GLASS-new/datasets/dtd/images
-classes=('grey_cloth' 'grid_cloth' 'yellow_cloth' 'pink_flower')
+#classes=('grey_cloth' 'grid_cloth' 'yellow_cloth' 'pink_flower')
+#classes=('grey_cloth' 'grid_cloth')
+classes=('yellow_cloth' 'pink_flower')
 flags=($(for class in "${classes[@]}"; do echo '-d '"${class}"; done))
 
 cd ..
@@ -30,8 +32,8 @@ python main.py \
     --distribution 0 \
     --mean 0.5 \
     --std 0.1 \
-    --fg 1 \
+    --fg 0 \
     --rand_aug 1 \
-    --batch_size 8 \
-    --resize 288 \
-    --imagesize 288 "${flags[@]}" wfdd $datapath $augpath
+    --batch_size 10 \
+    --resize 384  \
+    --imagesize 384 "${flags[@]}" wfdd $datapath $augpath

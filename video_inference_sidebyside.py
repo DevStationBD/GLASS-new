@@ -156,8 +156,8 @@ class VideoInferenceSideBySide:
         
         return overlay
     
-    def process_video_sidebyside(self, video_path, output_path, threshold=0.8):
-        """Process video and create side-by-side output"""
+    def process_video_sidebyside(self, video_path, output_path, threshold=0.9, show_live=True):
+        """Process video and create side-by-side output with optional live display"""
         cap = cv2.VideoCapture(video_path)
         
         if not cap.isOpened():
@@ -180,6 +180,18 @@ class VideoInferenceSideBySide:
         if not out.isOpened():
             raise ValueError(f"Could not create output video: {output_path}")
         
+        # Setup live display window if requested
+        if show_live:
+            window_name = "GLASS Real-time Inference"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            # Resize window to fit screen better (scale down side-by-side frame)
+            display_width = min(1200, frame_width * 2)
+            display_height = int(display_width * frame_height / (frame_width * 2))
+            cv2.resizeWindow(window_name, display_width, display_height)
+            
+            print(f"Live display: Press 'q' to quit, 'p' to pause/resume")
+            print(f"Display window: {display_width}x{display_height}")
+        
         # Use default threshold of 0.8 if none provided
         if threshold is None:
             threshold = 0.8
@@ -193,6 +205,7 @@ class VideoInferenceSideBySide:
         start_time = time.time()
         last_fps_update = start_time
         fps_update_interval = 1.0  # Update FPS every second
+        paused = False  # For pause/resume functionality
         
         with tqdm(total=total_frames, desc="Processing frames", 
                  bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]") as pbar:
@@ -231,8 +244,32 @@ class VideoInferenceSideBySide:
                 # Create side-by-side frame
                 sidebyside_frame = np.hstack([original_labeled, annotated_frame])
                 
-                # Write frame
+                # Write frame to output video
                 out.write(sidebyside_frame)
+                
+                # Show live display if enabled
+                if show_live:
+                    cv2.imshow(window_name, sidebyside_frame)
+                    
+                    # Handle keyboard input
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        print("\nStopping inference (user requested quit)...")
+                        break
+                    elif key == ord('p'):
+                        paused = not paused
+                        if paused:
+                            print("\nPaused - Press 'p' to resume or 'q' to quit")
+                            while paused:
+                                key = cv2.waitKey(30) & 0xFF
+                                if key == ord('p'):
+                                    paused = False
+                                    print("Resumed processing...")
+                                elif key == ord('q'):
+                                    print("Stopping inference...")
+                                    break
+                        if key == ord('q'):
+                            break
                 
                 if score > threshold:
                     anomaly_count += 1
@@ -256,6 +293,8 @@ class VideoInferenceSideBySide:
         # Clean up
         cap.release()
         out.release()
+        if show_live:
+            cv2.destroyAllWindows()
         
         # Calculate final timing statistics
         total_processing_time = time.time() - start_time
@@ -294,12 +333,14 @@ def main():
                        help='Path to input video file')
     parser.add_argument('--output_path', type=str, required=True,
                        help='Path for output video file')
-    parser.add_argument('--threshold', type=float, default=0.8,
-                       help='Anomaly threshold (default: 0.8)')
+    parser.add_argument('--threshold', type=float, default=0.9,
+                       help='Anomaly threshold (default: 0.9)')
     parser.add_argument('--image_size', type=int, default=384,
                        help='Image size used during training (default: 384)')
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='Device to use for inference')
+    parser.add_argument('--no_display', action='store_true',
+                       help='Disable live display window (default: show live display)')
     
     args = parser.parse_args()
     
@@ -325,10 +366,12 @@ def main():
     )
     
     # Process video
+    show_live = not args.no_display
     results = inference.process_video_sidebyside(
         video_path=args.video_path,
         output_path=args.output_path,
-        threshold=args.threshold
+        threshold=args.threshold,
+        show_live=show_live
     )
     
     print(f"\nDone! Check the output video: {args.output_path}")
