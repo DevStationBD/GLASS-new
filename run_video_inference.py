@@ -12,7 +12,7 @@ def main():
     parser.add_argument('--class_name', type=str, default='wfdd_yellow_cloth',
                        choices=['wfdd_yellow_cloth', 'wfdd_pink_flower'],
                        help='Which trained model to use')
-    parser.add_argument('--threshold', type=float, default=None,
+    parser.add_argument('--threshold', type=float, default=0.8,
                        help='Anomaly threshold (auto-calculated if not provided)')
     
     args = parser.parse_args()
