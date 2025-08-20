@@ -90,6 +90,105 @@ python onnx/pth2onnx.py
 python onnx/ort.py  # Run ONNX inference
 ```
 
+### Video Inference
+Run inference on video files using trained GLASS models:
+
+```bash
+# Side-by-side video inference (recommended)
+python inference/video_inference_sidebyside.py \
+    --model_path results/models/backbone_0/ \
+    --class_name mvtec_grid \
+    --video_path input.mp4 \
+    --output_path output.mp4 \
+    --threshold 0.8
+
+# Basic video inference
+python inference/video_inference.py \
+    --model_path results/models/backbone_0/ \
+    --class_name wfdd_yellow_cloth \
+    --video_path input.mp4 \
+    --output_path output.mp4
+
+# Video inference with defect size analysis
+python inference/video_inference_with_size.py \
+    --model_path results/models/backbone_0/ \
+    --class_name wfdd_pink_flower \
+    --video_path input.mp4 \
+    --output_path output.mp4 \
+    --pixel_size 0.1 \
+    --physical_unit mm
+
+# Easy wrapper script
+python inference/run_video_inference.py \
+    input.mp4 output.mp4 \
+    --class_name wfdd_yellow_cloth
+```
+
+### Video Creation from Datasets
+Create test videos from image datasets:
+
+```bash
+# Create video from all test images (includes all defect types)
+python preprocessing/create_video.py grid \
+    --input_path datasets/custom/grid/test \
+    --output preprocessing/grid_test_video.mp4
+
+# Create video from specific defect type
+python preprocessing/create_video.py grid \
+    --defect hole \
+    --output preprocessing/grid_hole_video.mp4
+
+# Create video from good images only
+python preprocessing/create_video.py grid \
+    --output preprocessing/grid_good_video.mp4
+```
+
+**Video Inference Features**:
+- Real-time anomaly detection and scoring
+- Side-by-side comparison with original frames
+- Defect area analysis and physical measurements
+- Live preview during processing
+- Comprehensive performance metrics
+- Support for all trained model classes
+
+### Defect Size Analysis
+Quantitative analysis of detected anomalies with physical measurements:
+
+```bash
+# Test size analyzer functionality
+python size_analyzer/test_defect_size_analysis.py
+
+# Direct usage in Python
+from size_analyzer import DefectSizeAnalyzer, DefectMetrics
+
+# Initialize with physical calibration
+analyzer = DefectSizeAnalyzer(
+    pixel_size=0.1,          # 0.1mm per pixel
+    physical_unit="mm",      # Units: mm, cm, inch
+    min_defect_area=10       # Minimum size threshold
+)
+
+# Analyze defects in anomaly mask
+metrics = analyzer.analyze_defects(
+    anomaly_mask,            # GLASS output mask
+    threshold=0.5,           # Detection threshold
+    use_morphology=True      # Noise filtering
+)
+
+# Access measurements
+print(f"Found {metrics.num_defects} defects")
+print(f"Total area: {metrics.total_defect_area_physical:.2f} {metrics.physical_unit}²")
+print(f"Largest defect: {max(metrics.defect_areas_physical):.2f} {metrics.physical_unit}²")
+```
+
+**Size Analysis Features**:
+- Physical size measurements (mm, cm, inch)
+- Statistical analysis (mean, median, std deviation)
+- Severity classification (low, medium, high, critical)
+- Batch processing for video analysis
+- Comprehensive visualizations with annotations
+- Export capabilities (JSON, CSV, images)
+
 ## Architecture Overview
 
 ### Core Components
@@ -156,16 +255,41 @@ dataset/
 3. **MAD-sys**: MVTec AD-synthesis test set with varying defect transparency levels (4 subsets with 320 normal + 946 anomaly samples each)
 4. **Foreground Masks**: Binary masks for normal samples from various datasets
 
-## Results and Outputs
+## Project Structure
 
-### Directory Structure
+### Directory Organization
 ```
-results/
-├── training/classname/  # Training visualizations
-├── eval/classname/      # Evaluation results
-├── judge/avg/           # Distribution analysis
-└── models/              # Saved checkpoints
+GLASS-new/
+├── datasets/            # Training and test data
+│   ├── custom/         # Custom datasets (grid, etc.)
+│   ├── WFDD/          # WFDD dataset
+│   └── dtd/           # DTD texture dataset for augmentation
+├── inference/          # Video inference scripts
+│   ├── video_inference_sidebyside.py  # Side-by-side inference (recommended)
+│   ├── video_inference.py             # Basic video inference
+│   ├── video_inference_with_size.py   # Inference with size analysis
+│   ├── run_video_inference.py         # Easy wrapper script
+│   └── README.md                      # Inference documentation
+├── preprocessing/      # Data preprocessing and video creation tools
+│   ├── create_video.py               # Create videos from image datasets
+│   ├── defect_simulator.py          # Synthetic defect generation
+│   └── preprocess_images.py         # Image preprocessing utilities
+├── size_analyzer/      # Defect size analysis and measurement tools
+│   ├── defect_size_analyzer.py      # Main analyzer class
+│   ├── test_defect_size_analysis.py # Testing and validation
+│   ├── DEFECT_SIZE_ANALYSIS_GUIDE.md # Detailed usage guide
+│   └── README.md                    # Size analyzer documentation
+├── results/            # Training outputs and model checkpoints
+│   ├── training/classname/  # Training visualizations
+│   ├── eval/classname/      # Evaluation results
+│   ├── judge/avg/           # Distribution analysis
+│   └── models/              # Saved checkpoints
+├── shell/              # Training scripts for different datasets
+├── onnx/              # ONNX export utilities
+└── output/            # Video inference outputs
 ```
+
+### Results and Outputs
 
 ### Checkpoints
 - `ckpt.pth`: Latest training checkpoint

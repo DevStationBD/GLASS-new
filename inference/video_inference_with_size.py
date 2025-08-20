@@ -6,6 +6,9 @@ import torch
 import numpy as np
 import argparse
 from pathlib import Path
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import backbones
 import glass
 import common
@@ -14,7 +17,7 @@ import glob
 from tqdm import tqdm
 import time
 import json
-from defect_size_analyzer import DefectSizeAnalyzer, DefectMetrics
+from size_analyzer import DefectSizeAnalyzer, DefectMetrics
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]

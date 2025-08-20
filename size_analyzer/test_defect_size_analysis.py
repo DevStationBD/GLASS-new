@@ -3,7 +3,10 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from defect_size_analyzer import DefectSizeAnalyzer, DefectMetrics
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from size_analyzer import DefectSizeAnalyzer, DefectMetrics
 import json
 
 def create_synthetic_anomaly_mask(width=384, height=384):
@@ -136,7 +139,7 @@ def test_batch_analysis():
         frames_data.append((image, mask))
     
     # Analyze batch
-    from defect_size_analyzer import batch_analyze_video_frames
+    from size_analyzer.defect_size_analyzer import batch_analyze_video_frames
     results = batch_analyze_video_frames(frames_data, pixel_size=0.1, threshold=0.5)
     
     # Print batch results
