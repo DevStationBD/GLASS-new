@@ -13,16 +13,24 @@ from torchvision import transforms
 import glob
 from tqdm import tqdm
 import time
+from defect_size_analyzer import DefectSizeAnalyzer
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 class VideoInferenceSideBySide:
-    def __init__(self, model_path, class_name, device='cuda:0', image_size=384):
+    def __init__(self, model_path, class_name, device='cuda:0', image_size=384, pixel_size=None, physical_unit="mm"):
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.class_name = class_name
         self.model_path = model_path
         self.image_size = image_size
+        
+        # Initialize defect size analyzer
+        self.size_analyzer = DefectSizeAnalyzer(
+            pixel_size=pixel_size,
+            physical_unit=physical_unit,
+            min_defect_area=5  # Lower threshold for video processing
+        )
         
         # Load the GLASS model
         self.glass_model = self._load_model()
@@ -103,18 +111,24 @@ class VideoInferenceSideBySide:
         
         return tensor
     
-    def predict_frame(self, frame_tensor):
-        """Run inference on a single frame"""
+    def predict_frame(self, frame_tensor, threshold=0.5):
+        """Run inference and defect area analysis on a single frame"""
         if self.glass_model is None:
-            return 0.0, np.zeros((self.image_size, self.image_size))
+            return 0.0, np.zeros((self.image_size, self.image_size)), None
         
         with torch.no_grad():
             scores, masks = self.glass_model._predict(frame_tensor)
             
-        return scores[0], masks[0]
+        score = scores[0]
+        mask = masks[0]
+        
+        # Calculate defect area metrics
+        metrics = self.size_analyzer.analyze_defects(mask, threshold=threshold, use_morphology=False)
+        
+        return score, mask, metrics
     
-    def create_annotated_frame(self, original_frame, mask, score, threshold=0.8, inference_fps=0, overall_fps=0):
-        """Create annotated frame with anomaly overlay"""
+    def create_annotated_frame(self, original_frame, mask, score, metrics=None, threshold=0.8, inference_fps=0, overall_fps=0):
+        """Create annotated frame with anomaly overlay and defect area information"""
         h, w = original_frame.shape[:2]
         
         # Resize mask to match frame size
@@ -145,14 +159,37 @@ class VideoInferenceSideBySide:
         cv2.putText(overlay, status, (10, 80), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
         
+        # Add defect area information
+        if metrics is not None:
+            # Defect count
+            defect_count_text = f'Defects: {metrics.num_defects}'
+            cv2.putText(overlay, defect_count_text, (10, 105), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Defect area percentage
+            area_percent_text = f'Area: {metrics.defect_percentage:.2f}%'
+            cv2.putText(overlay, area_percent_text, (10, 125), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Physical area if available
+            if metrics.physical_unit and metrics.total_defect_area_physical is not None:
+                physical_area_text = f'Physical: {metrics.total_defect_area_physical:.2f}{metrics.physical_unit}²'
+                cv2.putText(overlay, physical_area_text, (10, 145), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                y_offset = 170
+            else:
+                y_offset = 150
+        else:
+            y_offset = 110
+        
         # Add FPS information
         inference_fps_text = f'Inference FPS: {inference_fps:.1f}'
-        cv2.putText(overlay, inference_fps_text, (10, 105), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        cv2.putText(overlay, inference_fps_text, (10, y_offset), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         overall_fps_text = f'Processing FPS: {overall_fps:.1f}'
-        cv2.putText(overlay, overall_fps_text, (10, 125), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        cv2.putText(overlay, overall_fps_text, (10, y_offset + 20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         return overlay
     
@@ -219,9 +256,9 @@ class VideoInferenceSideBySide:
                 # Preprocess frame
                 frame_tensor = self.preprocess_frame(frame)
                 
-                # Get prediction
+                # Get prediction and defect area analysis
                 inference_start = time.time()
-                score, mask = self.predict_frame(frame_tensor)
+                score, mask, metrics = self.predict_frame(frame_tensor, threshold)
                 inference_time = time.time() - inference_start
                 scores.append(score)
                 
@@ -230,8 +267,8 @@ class VideoInferenceSideBySide:
                 current_fps = frame_count / elapsed_time if elapsed_time > 0 else 0
                 inference_fps = 1.0 / inference_time if inference_time > 0 else 0
                 
-                # Create annotated frame with FPS info
-                annotated_frame = self.create_annotated_frame(frame, mask, score, threshold, inference_fps, current_fps)
+                # Create annotated frame with FPS and defect area info
+                annotated_frame = self.create_annotated_frame(frame, mask, score, metrics, threshold, inference_fps, current_fps)
                 
                 # Add labels to frames
                 original_labeled = frame.copy()
@@ -277,13 +314,16 @@ class VideoInferenceSideBySide:
                 frame_count += 1
                 frame_time = time.time() - frame_start_time
                 
-                # Update progress bar with FPS info
+                # Update progress bar with FPS and defect area info
                 current_time = time.time()
                 if current_time - last_fps_update >= fps_update_interval:
+                    area_info = f'{metrics.defect_percentage:.1f}%' if metrics else '0%'
+                    defects_info = f'{metrics.num_defects}' if metrics else '0'
                     pbar.set_postfix({
                         'FPS': f'{current_fps:.1f}',
-                        'Inf_FPS': f'{inference_fps:.1f}',
                         'Score': f'{score:.3f}',
+                        'Area': area_info,
+                        'Defects': defects_info,
                         'Anomalies': anomaly_count
                     })
                     last_fps_update = current_time
@@ -342,6 +382,12 @@ def main():
     parser.add_argument('--no_display', action='store_true',
                        help='Disable live display window (default: show live display)')
     
+    # Defect size analysis parameters
+    parser.add_argument('--pixel_size', type=float, default=None,
+                       help='Physical size per pixel (e.g., 0.1 for 0.1mm per pixel)')
+    parser.add_argument('--physical_unit', type=str, default='mm',
+                       help='Physical unit for measurements (mm, cm, inch)')
+    
     args = parser.parse_args()
     
     # Validate inputs
@@ -358,11 +404,16 @@ def main():
     
     # Create inference instance
     print(f"Initializing GLASS model for class: {args.class_name}")
+    if args.pixel_size:
+        print(f"Physical measurements enabled: {args.pixel_size} {args.physical_unit}/pixel")
+    
     inference = VideoInferenceSideBySide(
         model_path=args.model_path,
         class_name=args.class_name,
         device=args.device,
-        image_size=args.image_size
+        image_size=args.image_size,
+        pixel_size=args.pixel_size,
+        physical_unit=args.physical_unit
     )
     
     # Process video

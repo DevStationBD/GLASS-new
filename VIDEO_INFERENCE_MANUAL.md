@@ -54,7 +54,7 @@ python video_inference_sidebyside.py \
 python video_inference_sidebyside.py \
     --model_path results/models/backbone_0/ \
     --class_name wfdd_yellow_cloth \
-    --video_path input/fabric_video.mp4 \
+    --video_path wfdd_videos/wfdd_yellow_cloth.mp4 \
     --output_path output/fabric_analysis.mp4
 ```
 
