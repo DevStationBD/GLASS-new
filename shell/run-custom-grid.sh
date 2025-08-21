@@ -1,17 +1,17 @@
 #!/bin/bash
 
 # GLASS Training Script for Custom Grid Fabric Dataset
-# Trains the GLASS anomaly detection model on custom grid fabric with simulated defects
+# Trains the GLASS anomaly detection model on multiple custom fabric classes with simulated defects
 
 set -e
 
-echo "🚀 Training GLASS on Custom Grid Fabric Dataset..."
-echo "================================================"
+echo "🚀 Training GLASS on Custom Fabric Dataset..."
+echo "============================================"
 
 # Dataset configuration
 datapath=/home/arif/Projects/GLASS-new/datasets/custom
 augpath=/home/arif/Projects/GLASS-new/datasets/dtd/images
-classes=('grid')
+classes=('grid-original')   # Add more class names here
 flags=($(for class in "${classes[@]}"; do echo '-d '"${class}"; done))
 
 # Check if dataset exists
@@ -29,34 +29,51 @@ if [ ! -d "$augpath" ]; then
     exit 1
 fi
 
-# Validate dataset structure (GLASS expects nested structure: dataset_name/class_name/)
-required_dirs=("grid/train/good" "grid/test/good" "grid/test/hole" "grid/test/foreign_yarn" "grid/test/missing_yarn" "grid/test/slab" "grid/test/spot" "grid/ground_truth")
-for dir in "${required_dirs[@]}"; do
-    if [ ! -d "$datapath/$dir" ]; then
-        echo "❌ Error: Required directory '$datapath/$dir' not found!"
-        echo "Dataset structure is incomplete. Please regenerate the dataset."
-        exit 1
-    fi
-done
+# Loop over all classes
+for cls in "${classes[@]}"; do
+    echo ""
+    echo "📂 Validating dataset for class: $cls"
+    echo "--------------------------------"
 
-# Count dataset files
-train_count=$(find "$datapath/grid/train/good" -name "*.png" | wc -l)
-test_good_count=$(find "$datapath/grid/test/good" -name "*.png" | wc -l)
-total_defect_count=0
-for defect_type in hole foreign_yarn missing_yarn slab spot; do
-    defect_count=$(find "$datapath/grid/test/$defect_type" -name "*.png" | wc -l)
-    total_defect_count=$((total_defect_count + defect_count))
-done
+    # Required dataset structure
+    required_dirs=(
+        "$cls/train/good"
+        "$cls/test/good"
+        "$cls/test/hole"
+        "$cls/test/foreign_yarn"
+        "$cls/test/missing_yarn"
+        "$cls/test/slab"
+        "$cls/test/spot"
+        "$cls/ground_truth"
+    )
 
-echo "📊 Dataset Statistics:"
-echo "   Training images: $train_count"
-echo "   Test good images: $test_good_count"  
-echo "   Total defect images: $total_defect_count"
-echo "   Defect types: hole, foreign_yarn, missing_yarn, slab, spot"
-echo ""
+    for dir in "${required_dirs[@]}"; do
+        if [ ! -d "$datapath/$dir" ]; then
+            echo "❌ Error: Required directory '$datapath/$dir' not found!"
+            echo "Dataset structure for class '$cls' is incomplete. Please regenerate the dataset."
+            exit 1
+        fi
+    done
+
+    # Count dataset files
+    train_count=$(find "$datapath/$cls/train/good" -name "*.png" | wc -l)
+    test_good_count=$(find "$datapath/$cls/test/good" -name "*.png" | wc -l)
+    total_defect_count=0
+    for defect_type in hole foreign_yarn missing_yarn slab spot; do
+        defect_count=$(find "$datapath/$cls/test/$defect_type" -name "*.png" | wc -l)
+        total_defect_count=$((total_defect_count + defect_count))
+    done
+
+    echo "📊 Dataset Statistics for $cls:"
+    echo "   Training images: $train_count"
+    echo "   Test good images: $test_good_count"
+    echo "   Total defect images: $total_defect_count"
+    echo "   Defect types: hole, foreign_yarn, missing_yarn, slab, spot"
+    echo ""
+done
 
 # Ask for confirmation
-read -p "Continue with GLASS training? (y/n): " -n 1 -r
+read -p "Continue with GLASS training for ALL classes? (y/n): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     echo "❌ Training cancelled."
@@ -75,7 +92,7 @@ echo ""
 # Change to project directory
 cd /home/arif/Projects/GLASS-new
 
-# Run GLASS training with optimized parameters for custom grid fabric
+# Run GLASS training once across all classes
 python main.py \
     --gpu 0 \
     --seed 0 \
@@ -115,11 +132,11 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "📁 Results saved to:"
     echo "   - Models: results/models/"
-    echo "   - Evaluation: results/eval/grid/"
-    echo "   - Training logs: results/training/grid/"
+    echo "   - Evaluation: results/eval/<class_name>/"
+    echo "   - Training logs: results/training/<class_name>/"
     echo ""
     echo "📊 Performance metrics:"
-    echo "   Check results.csv for detailed metrics"
+    echo "   Check results/results.csv for detailed metrics"
     echo ""
     echo "🎯 Next steps:"
     echo "   1. Review training results:"
@@ -132,13 +149,13 @@ if [ $? -eq 0 ]; then
     echo "      python video_inference.py --model_path results/models/backbone_0/ckpt.pth --input_path /path/to/test/image.jpg"
     echo ""
     echo "   4. Visualize results:"
-    echo "      Check results/eval/grid/ for anomaly maps"
+    echo "      Check results/eval/<class_name>/ for anomaly maps"
 else
     echo "❌ GLASS training failed! Check the error messages above."
     echo ""
     echo "🔍 Troubleshooting tips:"
     echo "   - Ensure sufficient GPU memory (recommend 8GB+)"
-    echo "   - Check dataset integrity with: python preprocessing/mask_utils.py --validate datasets/custom/grid/ground_truth"
+    echo "   - Check dataset integrity with: python preprocessing/mask_utils.py --validate datasets/custom/<class_name>/ground_truth"
     echo "   - Reduce batch_size if out of memory errors occur"
     echo "   - Verify CUDA/PyTorch installation"
     exit 1
