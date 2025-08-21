@@ -231,9 +231,10 @@ class VideoInferenceSideBySide:
         print(f"Total frames: {total_frames}, FPS: {fps}")
         print(f"Frame size: {frame_width}x{frame_height}")
         
-        # Create output video writer (side-by-side width)
+        # Create output video writer (side-by-side width using transformed frame dimensions)
+        # The transformed frame will be image_size x image_size (e.g., 384x384)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width * 2, frame_height))
+        out = cv2.VideoWriter(output_path, fourcc, fps, (self.image_size * 2, self.image_size))
         
         if not out.isOpened():
             raise ValueError(f"Could not create output video: {output_path}")
@@ -243,12 +244,14 @@ class VideoInferenceSideBySide:
             window_name = "GLASS Real-time Inference"
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
             # Resize window to fit screen better (scale down side-by-side frame)
-            display_width = min(1200, frame_width * 2)
-            display_height = int(display_width * frame_height / (frame_width * 2))
+            # Use transformed frame dimensions
+            display_width = min(1200, self.image_size * 2)
+            display_height = int(display_width * self.image_size / (self.image_size * 2))
             cv2.resizeWindow(window_name, display_width, display_height)
             
             print(f"Live display: Press 'q' to quit, 'p' to pause/resume")
             print(f"Display window: {display_width}x{display_height}")
+            print(f"Transformed frame size: {self.image_size}x{self.image_size}")
         
         # Use default threshold of 0.8 if none provided
         if threshold is None:
@@ -274,8 +277,8 @@ class VideoInferenceSideBySide:
                 if not ret:
                     break
                 
-                # Preprocess frame
-                frame_tensor = self.preprocess_frame(frame)
+                # Preprocess frame and get transformed image for display
+                frame_tensor, transformed_frame = self.preprocess_frame(frame, return_transformed_image=True)
                 
                 # Get prediction and defect area analysis
                 inference_start = time.time()
@@ -288,19 +291,19 @@ class VideoInferenceSideBySide:
                 current_fps = frame_count / elapsed_time if elapsed_time > 0 else 0
                 inference_fps = 1.0 / inference_time if inference_time > 0 else 0
                 
-                # Create annotated frame with FPS and defect area info
-                annotated_frame = self.create_annotated_frame(frame, mask, score, metrics, threshold, inference_fps, current_fps)
+                # Create annotated frame using transformed frame (for proper heatmap alignment)
+                annotated_frame = self.create_annotated_frame(transformed_frame, mask, score, metrics, threshold, inference_fps, current_fps)
                 
-                # Add labels to frames
-                original_labeled = frame.copy()
-                cv2.putText(original_labeled, 'Original', (10, 30), 
+                # Add labels to frames - use transformed frame instead of original
+                transformed_labeled = transformed_frame.copy()
+                cv2.putText(transformed_labeled, 'Transformed Input', (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 
-                cv2.putText(annotated_frame, 'GLASS Detection', (10, frame_height - 20), 
+                cv2.putText(annotated_frame, 'GLASS Detection', (10, self.image_size - 20), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 
-                # Create side-by-side frame
-                sidebyside_frame = np.hstack([original_labeled, annotated_frame])
+                # Create side-by-side frame using transformed input and annotated result
+                sidebyside_frame = np.hstack([transformed_labeled, annotated_frame])
                 
                 # Write frame to output video
                 out.write(sidebyside_frame)
