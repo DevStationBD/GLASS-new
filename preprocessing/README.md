@@ -20,40 +20,73 @@ The pipeline transforms raw fabric images into a complete anomaly detection data
 ## Scripts
 
 ### 1. `orchestrator.py` - Main Pipeline Controller
-**Primary interface for dataset creation**
+**Primary interface for dataset creation and video generation**
 
 ```bash
-# Complete pipeline
-python orchestrator.py \
+# Complete pipeline with separate dataset and class names (recommended)
+# Full pipeline and video creation are now enabled by default
+python preprocessing/orchestrator.py \
     --source raw-data/custom-grid/good-images \
-    --dataset custom_grid \
-    --full_pipeline
+    --dataset custom \
+    --class_name grid
 
-# Specific steps only
-python orchestrator.py \
+# Video creation only from existing dataset (disable pipeline)
+python preprocessing/orchestrator.py \
     --source raw-data/custom-grid/good-images \
-    --dataset custom_grid \
-    --steps structure preprocess defects
+    --dataset custom \
+    --class_name grid \
+    --no_pipeline
+
+# Dataset creation only (disable video creation)
+python preprocessing/orchestrator.py \
+    --source raw-data/custom-grid/good-images \
+    --dataset custom \
+    --class_name grid \
+    --no_videos
+
+# Specific steps only (disables defaults)
+python preprocessing/orchestrator.py \
+    --source raw-data/custom-grid/good-images \
+    --dataset custom \
+    --class_name grid \
+    --steps structure preprocess defects videos
+
+# Backward compatible (legacy format still works)
+python preprocessing/orchestrator.py \
+    --source raw-data/custom-grid/good-images \
+    --dataset custom_grid
 ```
 
 **Key Options:**
 - `--source`: Directory with good fabric images
-- `--dataset`: Dataset name (creates datasets/{name}/)
-- `--full_pipeline`: Run complete pipeline
-- `--steps`: Run specific steps (structure, preprocess, defects, validate)
+- `--dataset`: Dataset name (e.g., custom, wfdd, mvtec)
+- `--class_name`: Class name (e.g., grid, yellow_cloth, bottle). If not provided, will be extracted from dataset name for backward compatibility
+- `--full_pipeline`: Run complete dataset creation pipeline (default: True)
+- `--create_videos`: Create videos from test images (default: True)
+- `--no_pipeline`: Disable full pipeline (use with --steps or video-only mode)
+- `--no_videos`: Disable video creation (dataset creation only)
+- `--steps`: Run specific steps (structure, preprocess, defects, validate, videos)
 - `--images_per_defect`: Number of defective images per type (default: 50)
-- `--image_size`: Target image size (default: 288)
+- `--image_size`: Target image size (default: 384)
+
+**Video Configuration Options:**
+- `--video_fps`: Video FPS (default: 1 = 1 second per image)
+- `--video_resize_method`: Resize method (none, largest, preserve_aspect, crop)
+- `--video_enhance`: Apply image enhancement to video frames
+- `--video_combined`: Create combined single video (default behavior)
+- `--video_separate`: Create separate videos for each defect type instead of combined
+- `--video_output`: Video output directory (default: test-video)
 
 ### 2. `prepare_dataset_structure.py` - Directory Setup
 **Creates WFDD-compatible directory structure**
 
 ```bash
-python prepare_dataset_structure.py --dataset_name custom_grid
+python preprocessing/prepare_dataset_structure.py --dataset_name custom_grid
 ```
 
 Creates:
 ```
-datasets/custom_grid/
+datasets/custom/grid/
 ├── train/good/
 ├── test/good/
 ├── test/{defect_type}/
@@ -64,15 +97,15 @@ datasets/custom_grid/
 **Preprocesses and splits good images into train/test**
 
 ```bash
-python preprocess_images.py \
+python preprocessing/preprocess_images.py \
     --source raw-data/custom-grid/good-images \
-    --target datasets/custom_grid \
+    --target datasets/custom/grid \
     --image_size 288 \
     --train_ratio 0.8
 ```
 
 Features:
-- Resizes images to target size with padding
+- Preserves original image dimensions (no resizing or padding)
 - Enhances contrast, brightness, sharpness
 - Splits into train/test sets
 - Saves as PNG format
@@ -81,9 +114,9 @@ Features:
 **Simulates realistic fabric defects on good images**
 
 ```bash
-python defect_simulator.py \
-    --input datasets/custom_grid/test/good \
-    --output datasets/custom_grid/test \
+python preprocessing/defect_simulator.py \
+    --input datasets/custom/grid/test/good \
+    --output datasets/custom/grid/test \
     --defect_types hole foreign_yarn missing_yarn slab spot \
     --images_per_defect 50
 ```
@@ -100,10 +133,10 @@ Defect Details:
 
 ```bash
 # Validate all masks
-python mask_utils.py --validate datasets/custom_grid/ground_truth --plot_stats
+python preprocessing/mask_utils.py --validate datasets/custom/grid/ground_truth --plot_stats
 
 # Clean/process masks
-python mask_utils.py --clean datasets/custom_grid/ground_truth/hole
+python preprocessing/mask_utils.py --clean datasets/custom/grid/ground_truth/hole
 ```
 
 Validation checks:
@@ -125,18 +158,25 @@ raw-data/custom-grid/good-images/
 
 ### Step 2: Run Complete Pipeline
 ```bash
-cd preprocessing
-python orchestrator.py \
-    --source ../raw-data/custom-grid/good-images \
+# New simplified format with separate dataset and class names (recommended)
+# Full pipeline and video creation are enabled by default
+python preprocessing/orchestrator.py \
+    --source raw-data/custom-grid/good-images \
+    --dataset custom \
+    --class_name grid \
+    --images_per_defect 50
+
+# Or use legacy format (still supported)
+python preprocessing/orchestrator.py \
+    --source raw-data/custom-grid/good-images \
     --dataset custom_grid \
-    --full_pipeline \
     --images_per_defect 50
 ```
 
 ### Step 3: Verify Results
 Check the created dataset:
 ```
-datasets/custom_grid/
+datasets/custom/grid/
 ├── train/good/           # ~200 training images
 ├── test/good/            # ~50 test images
 ├── test/hole/            # 50 hole defect images
@@ -154,7 +194,6 @@ datasets/custom_grid/
 
 ### Step 4: Use with GLASS
 ```bash
-cd ..
 python main.py \
     --gpu 0 \
     --test ckpt \
@@ -166,14 +205,14 @@ python main.py \
     --batch_size 8 \
     --resize 288 \
     --imagesize 288 \
-    -d custom_grid \
-    datasets/custom_grid /path/to/dtd
+    -d grid \
+    datasets/custom/grid /path/to/dtd
 ```
 
 ## Configuration
 
 ### Default Parameters
-- **Image Size**: 288x288 pixels
+- **Image Processing**: Original dimensions preserved (no resizing)
 - **Train/Test Split**: 80/20
 - **Images per Defect**: 50
 - **Defect Types**: hole, foreign_yarn, missing_yarn, slab, spot
@@ -205,6 +244,57 @@ Install with:
 pip install opencv-python Pillow numpy matplotlib
 ```
 
+## Video Creation
+
+The orchestrator can create videos from test datasets for visual inspection and demonstration purposes.
+
+### Video Creation Examples
+```bash
+# Create videos from existing dataset (no pipeline, videos enabled by default)
+python preprocessing/orchestrator.py \
+    --source datasets/custom/grid/test/good \
+    --dataset custom \
+    --class_name grid \
+    --no_pipeline
+
+# Create videos with enhanced frames
+python preprocessing/orchestrator.py \
+    --source datasets/wfdd/yellow_cloth/test/good \
+    --dataset wfdd \
+    --class_name yellow_cloth \
+    --no_pipeline \
+    --video_enhance
+
+# Create combined video instead of separate per defect type
+python preprocessing/orchestrator.py \
+    --source datasets/custom/grid/test/good \
+    --dataset custom \
+    --class_name grid \
+    --no_pipeline \
+    --video_combined
+```
+
+### Video Output Structure
+Videos are organized by dataset and class:
+```
+test-video/
+├── custom/
+│   └── grid/
+│       ├── good.mp4                 # Normal images
+│       ├── hole.mp4                # Hole defect images
+│       ├── foreign_yarn.mp4        # Foreign yarn defect images
+│       ├── missing_yarn.mp4        # Missing yarn defect images
+│       ├── slab.mp4                # Slab defect images
+│       ├── spot.mp4                # Spot defect images
+│       └── grid_combined.mp4       # All images combined (if --video_combined)
+├── wfdd/
+│   └── yellow_cloth/
+│       └── ...
+└── mvtec/
+    └── bottle/
+        └── ...
+```
+
 ## Output Files
 
 ### Dataset Structure
@@ -212,6 +302,10 @@ pip install opencv-python Pillow numpy matplotlib
 - **Test Good Images**: `test/good/*.png`
 - **Test Defect Images**: `test/{defect_type}/*.png`
 - **Ground Truth Masks**: `ground_truth/{defect_type}/*_mask.png`
+
+### Video Files
+- **Test Videos**: `test-video/{dataset}/{class}/{defect_type}.mp4`
+- **Combined Videos**: `test-video/{dataset}/{class}/{class}_combined.mp4` (if enabled)
 
 ### Metadata
 - **dataset_info.json**: Complete dataset statistics and configuration
@@ -229,23 +323,23 @@ pip install opencv-python Pillow numpy matplotlib
 ### Validation
 Run validation separately:
 ```bash
-python mask_utils.py --validate datasets/custom_grid/ground_truth
+python preprocessing/mask_utils.py --validate datasets/custom/grid/ground_truth
 ```
 
 ### Manual Steps
 Run pipeline steps individually for debugging:
 ```bash
 # Step 1: Structure
-python prepare_dataset_structure.py --dataset_name custom_grid
+python preprocessing/prepare_dataset_structure.py --dataset_name custom_grid
 
 # Step 2: Preprocessing  
-python preprocess_images.py --source raw-data/custom-grid/good-images --target datasets/custom_grid
+python preprocessing/preprocess_images.py --source raw-data/custom-grid/good-images --target datasets/custom/grid
 
 # Step 3: Defect generation
-python defect_simulator.py --input datasets/custom_grid/test/good --output datasets/custom_grid/test
+python preprocessing/defect_simulator.py --input datasets/custom/grid/test/good --output datasets/custom/grid/test
 
 # Step 4: Validation
-python mask_utils.py --validate datasets/custom_grid/ground_truth
+python preprocessing/mask_utils.py --validate datasets/custom/grid/ground_truth
 ```
 
 ## Advanced Usage
@@ -262,13 +356,30 @@ def simulate_custom_defect(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndar
 ```
 
 ### Batch Processing
-Process multiple datasets:
+Process multiple datasets with separate names:
 ```bash
-for dataset in grid_fabric woven_fabric knit_fabric; do
-    python orchestrator.py \
+# Process multiple fabric types with separate dataset and class names
+# Full pipeline and video creation are enabled by default
+declare -A datasets=(
+    ["custom"]="grid"
+    ["wfdd"]="yellow_cloth"
+    ["mvtec"]="bottle"
+)
+
+for dataset in "${!datasets[@]}"; do
+    class_name="${datasets[$dataset]}"
+    echo "Processing $dataset/$class_name..."
+    python preprocessing/orchestrator.py \
+        --source raw-data/${dataset}-${class_name}/good-images \
+        --dataset "$dataset" \
+        --class_name "$class_name"
+done
+
+# Or use legacy format for backward compatibility
+for dataset in custom_grid wfdd_yellow_cloth mvtec_bottle; do
+    python preprocessing/orchestrator.py \
         --source raw-data/$dataset/good-images \
-        --dataset $dataset \
-        --full_pipeline
+        --dataset $dataset
 done
 ```
 

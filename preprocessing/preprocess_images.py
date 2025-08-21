@@ -56,7 +56,7 @@ class ImagePreprocessor:
     
     def preprocess_image(self, image_path: Path) -> np.ndarray:
         """
-        Preprocess a single image with resizing, enhancement, and normalization.
+        Preprocess a single image preserving original dimensions.
         
         Args:
             image_path: Path to input image
@@ -72,10 +72,8 @@ class ImagePreprocessor:
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             
-            # Resize image while maintaining aspect ratio
-            image = self._resize_with_padding(image, self.image_size)
-            
-            # Apply image enhancements
+            # Keep original image dimensions (no resizing or padding)
+            # Only apply image enhancements
             image = self._enhance_image(image)
             
             return np.array(image)
@@ -197,7 +195,7 @@ class ImagePreprocessor:
         logger.info(f"   Training images: {train_count}")
         logger.info(f"   Testing images: {test_count}")
         logger.info(f"   Total processed: {total_processed}/{len(image_files)}")
-        logger.info(f"   Image size: {self.image_size}x{self.image_size}")
+        logger.info(f"   Original image dimensions preserved")
         
         return True
     
@@ -217,15 +215,13 @@ class ImagePreprocessor:
             logger.error("No processed images found in train/test directories!")
             return False
         
-        # Check image dimensions
+        # Check that images exist and are valid (keep original dimensions)
         sample_image_path = next(train_dir.glob("*.png"))
         sample_image = Image.open(sample_image_path)
         
-        if sample_image.size != (self.image_size, self.image_size):
-            logger.error(f"Image size mismatch! Expected {self.image_size}x{self.image_size}, got {sample_image.size}")
-            return False
-        
-        logger.info("✅ Preprocessing validation passed!")
+        logger.info(f"✅ Preprocessing validation passed!")
+        logger.info(f"   Sample image dimensions: {sample_image.size}")
+        logger.info(f"   Original dimensions preserved")
         return True
 
 

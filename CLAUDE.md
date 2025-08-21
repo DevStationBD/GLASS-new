@@ -125,8 +125,33 @@ python inference/run_video_inference.py \
 ```
 
 ### Video Creation from Datasets
-Create test videos from image datasets:
 
+#### **Enhanced Dataset Video Creation (Recommended)**
+Create organized videos from test datasets with preprocessing options:
+
+```bash
+# Create combined video for all test types (organized storage)
+python preprocessing/create_dataset_video.py --dataset custom --class_name grid
+
+# Create separate videos for each defect type
+python preprocessing/create_dataset_video.py --dataset custom --class_name grid --separate
+
+# Create enhanced videos with image improvements
+python preprocessing/create_dataset_video.py --dataset wfdd --class_name yellow_cloth --enhance
+
+# Create videos from specific test types only
+python preprocessing/create_dataset_video.py --dataset custom --class_name grid --test_types good hole spot
+
+# Create videos with largest dimensions (no padding)
+python preprocessing/create_dataset_video.py --dataset custom --class_name grid --resize_method largest
+
+# List available test structure
+python preprocessing/create_dataset_video.py --dataset custom --class_name grid --list_structure
+```
+
+**Output Organization**: `test-video/{dataset-name}/{class-name}/`
+
+#### **Basic Video Creation (Legacy)**
 ```bash
 # Create video from all test images (includes all defect types)
 python preprocessing/create_video.py grid \
@@ -137,10 +162,6 @@ python preprocessing/create_video.py grid \
 python preprocessing/create_video.py grid \
     --defect hole \
     --output preprocessing/grid_hole_video.mp4
-
-# Create video from good images only
-python preprocessing/create_video.py grid \
-    --output preprocessing/grid_good_video.mp4
 ```
 
 **Video Inference Features**:
@@ -271,9 +292,11 @@ GLASS-new/
 │   ├── run_video_inference.py         # Easy wrapper script
 │   └── README.md                      # Inference documentation
 ├── preprocessing/      # Data preprocessing and video creation tools
-│   ├── create_video.py               # Create videos from image datasets
+│   ├── create_dataset_video.py      # Enhanced dataset video creation (recommended)
+│   ├── create_video.py               # Basic video creation from datasets
+│   ├── preprocess_images.py         # Image preprocessing for dataset preparation
 │   ├── defect_simulator.py          # Synthetic defect generation
-│   └── preprocess_images.py         # Image preprocessing utilities
+│   └── README.md                    # Preprocessing documentation
 ├── size_analyzer/      # Defect size analysis and measurement tools
 │   ├── defect_size_analyzer.py      # Main analyzer class
 │   ├── test_defect_size_analysis.py # Testing and validation
@@ -284,6 +307,10 @@ GLASS-new/
 │   ├── eval/classname/      # Evaluation results
 │   ├── judge/avg/           # Distribution analysis
 │   └── models/              # Saved checkpoints
+├── test-video/         # Organized dataset videos by dataset/class structure
+│   ├── custom/        # Custom dataset videos
+│   ├── wfdd/          # WFDD dataset videos
+│   └── mvtec/         # MVTec dataset videos
 ├── shell/              # Training scripts for different datasets
 ├── onnx/              # ONNX export utilities
 └── output/            # Video inference outputs

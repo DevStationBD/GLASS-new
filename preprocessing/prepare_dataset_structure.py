@@ -17,10 +17,23 @@ class DatasetStructureCreator:
     
     def __init__(self, dataset_name: str, class_name: str = None, base_path: str = None):
         self.dataset_name = dataset_name
-        self.class_name = class_name or dataset_name  # Use dataset_name as class_name if not specified
         self.base_path = Path(base_path) if base_path else Path(__file__).parent.parent / "datasets"
-        self.dataset_path = self.base_path / dataset_name
-        self.class_path = self.dataset_path / self.class_name
+        
+        # Create structure: datasets/[dataset-name]/[class-name]/
+        if '_' in dataset_name and not class_name:
+            # Legacy mode: extract dataset and class from combined name
+            parts = dataset_name.split('_', 1)
+            actual_dataset = parts[0]
+            actual_class = parts[1]
+            self.dataset_name = actual_dataset  # Update to actual dataset name
+            self.class_name = actual_class      # Set to actual class name
+            self.dataset_path = self.base_path / actual_dataset
+            self.class_path = self.dataset_path / actual_class
+        else:
+            # New mode: separate dataset and class
+            self.class_name = class_name or self._extract_class_from_combined_name(dataset_name)
+            self.dataset_path = self.base_path / dataset_name
+            self.class_path = self.dataset_path / self.class_name
         
         # Define defect types for fabric analysis
         self.defect_types = [
@@ -30,6 +43,11 @@ class DatasetStructureCreator:
             "slab",          # Thick yarn sections
             "spot"           # Stains, contamination marks
         ]
+    
+    def _extract_class_from_combined_name(self, dataset_name: str) -> str:
+        """Extract class name from combined dataset name for backward compatibility."""
+        parts = dataset_name.split('_', 1)
+        return parts[1] if len(parts) >= 2 else dataset_name
     
     def create_directory_structure(self):
         """Create complete GLASS-compatible directory structure."""
