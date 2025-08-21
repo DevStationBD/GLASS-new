@@ -38,10 +38,14 @@ class VideoInferenceSideBySide:
         # Load the GLASS model
         self.glass_model = self._load_model()
         
-        # Image preprocessing - using the same size as training
+        # Image preprocessing - match training preprocessing with center crop
+        # Training uses: Resize(resize) → CenterCrop(imagesize) → ToTensor() → Normalize()
+        # For inference, we use a slightly larger resize followed by center crop to match training exactly
+        resize_size = int(self.image_size * 1.1)  # 10% larger for center cropping
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((self.image_size, self.image_size)),
+            transforms.Resize(resize_size),
+            transforms.CenterCrop(self.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
@@ -101,7 +105,7 @@ class VideoInferenceSideBySide:
         glass_model.eval()
         return glass_model
     
-    def preprocess_frame(self, frame):
+    def preprocess_frame(self, frame, return_transformed_image=False):
         """Preprocess a single frame for inference"""
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -111,6 +115,20 @@ class VideoInferenceSideBySide:
         
         # Add batch dimension
         tensor = tensor.unsqueeze(0)
+        
+        if return_transformed_image:
+            # Convert tensor back to displayable image for preview
+            # Denormalize the tensor
+            denorm_tensor = tensor[0].clone()
+            for t, m, s in zip(denorm_tensor, IMAGENET_MEAN, IMAGENET_STD):
+                t.mul_(s).add_(m)
+            
+            # Convert to numpy and BGR for OpenCV
+            transformed_image = denorm_tensor.permute(1, 2, 0).numpy()
+            transformed_image = np.clip(transformed_image * 255, 0, 255).astype(np.uint8)
+            transformed_image = cv2.cvtColor(transformed_image, cv2.COLOR_RGB2BGR)
+            
+            return tensor, transformed_image
         
         return tensor
     
