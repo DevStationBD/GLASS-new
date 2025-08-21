@@ -69,7 +69,10 @@ class DatasetOrchestrator:
             "train_ratio": 0.8,
             "images_per_defect": 50,
             "defect_types": ["hole", "foreign_yarn", "missing_yarn", "slab", "spot"],
-            "seed": 42
+            "seed": 42,
+            "use_real_defects": False,  # Use real WFDD patterns instead of synthetic
+            "wfdd_path": None,  # Path to WFDD dataset for real pattern extraction
+            "pattern_library_path": None  # Path to pre-extracted pattern library
         }
         
         # Video configuration
@@ -189,7 +192,14 @@ class DatasetOrchestrator:
     
     def step_3_generate_defects(self) -> bool:
         """Step 3: Generate defective images and masks."""
-        logger.info("🔧 Step 3: Generating defective images...")
+        if self.config["use_real_defects"]:
+            return self.step_3_generate_real_defects()
+        else:
+            return self.step_3_generate_synthetic_defects()
+    
+    def step_3_generate_synthetic_defects(self) -> bool:
+        """Step 3a: Generate synthetic defective images and masks."""
+        logger.info("🔧 Step 3: Generating synthetic defective images...")
         
         input_dir = self.dataset_dir / "test" / "good"
         output_dir = self.dataset_dir / "test"
@@ -205,9 +215,85 @@ class DatasetOrchestrator:
         success = self.run_script("defect_simulator.py", args)
         if success:
             self.pipeline_status["defects_generated"] = True
-            logger.info("✅ Defect generation completed successfully")
+            logger.info("✅ Synthetic defect generation completed successfully")
         else:
-            logger.error("❌ Failed to generate defects")
+            logger.error("❌ Failed to generate synthetic defects")
+        
+        return success
+    
+    def step_3_generate_real_defects(self) -> bool:
+        """Step 3b: Generate defective images using real WFDD patterns."""
+        logger.info("🎨 Step 3: Generating defective images using real WFDD patterns...")
+        
+        input_dir = self.dataset_dir / "test" / "good"
+        output_dir = self.dataset_dir / "test"
+        
+        # First, check if we need to extract patterns from WFDD
+        pattern_library_path = self.config.get("pattern_library_path")
+        wfdd_path = self.config.get("wfdd_path")
+        
+        if not pattern_library_path and not wfdd_path:
+            # Default WFDD path
+            wfdd_path = str(self.base_output_dir / "WFDD")
+            if not Path(wfdd_path).exists():
+                logger.error("❌ Real defects requested but no WFDD path or pattern library provided")
+                logger.error("   Please specify --wfdd_path or --pattern_library_path")
+                return False
+        
+        # Set up pattern extraction/loading
+        patterns_dir = self.scripts_dir.parent / "patterns"
+        patterns_dir.mkdir(exist_ok=True)
+        
+        if not pattern_library_path:
+            pattern_library_path = str(patterns_dir / "defect_patterns.pkl")
+        
+        # Extract patterns if needed
+        if not Path(pattern_library_path).exists():
+            if not wfdd_path or not Path(wfdd_path).exists():
+                logger.error(f"❌ WFDD dataset not found at: {wfdd_path}")
+                logger.error("   Please provide valid --wfdd_path for pattern extraction")
+                return False
+            
+            logger.info("📦 Extracting defect patterns from WFDD dataset...")
+            extract_args = [
+                "--mode", "extract",
+                "--wfdd_path", wfdd_path,
+                "--patterns_output", str(patterns_dir)
+            ]
+            
+            if not self.run_script("real_defect_extractor.py", extract_args):
+                logger.error("❌ Failed to extract defect patterns from WFDD")
+                return False
+            
+            logger.info("✅ Defect pattern extraction completed")
+        
+        # Map fabric class name to WFDD fabric type
+        fabric_mapping = {
+            "grid": "grid_cloth",
+            "grey": "grey_cloth", 
+            "pink": "pink_flower",
+            "yellow": "yellow_cloth"
+        }
+        
+        target_fabric = fabric_mapping.get(self.class_name, "grid_cloth")
+        
+        # Apply real defect patterns
+        logger.info(f"🎨 Applying real defect patterns to {self.class_name} fabric...")
+        augment_args = [
+            "--mode", "augment",
+            "--patterns_path", str(patterns_dir),
+            "--target_images", str(input_dir),
+            "--output_dir", str(output_dir),
+            "--target_fabric", target_fabric,
+            "--images_per_defect", str(self.config["images_per_defect"])
+        ]
+        
+        success = self.run_script("real_defect_extractor.py", augment_args)
+        if success:
+            self.pipeline_status["defects_generated"] = True
+            logger.info("✅ Real defect augmentation completed successfully")
+        else:
+            logger.error("❌ Failed to generate real defects")
         
         return success
     
@@ -578,6 +664,14 @@ def main():
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed (default: 42)")
     
+    # Real defect configuration
+    parser.add_argument("--use_real_defects", action="store_true",
+                       help="Use real WFDD defect patterns instead of synthetic defects")
+    parser.add_argument("--wfdd_path",
+                       help="Path to WFDD dataset for real pattern extraction")
+    parser.add_argument("--pattern_library_path",
+                       help="Path to pre-extracted defect pattern library (.pkl file)")
+    
     # Video configuration
     parser.add_argument("--video_fps", type=int, default=1,
                        help="Video FPS (default: 1 = 1 second per image)")
@@ -608,7 +702,10 @@ def main():
         "train_ratio": args.train_ratio,
         "images_per_defect": args.images_per_defect,
         "defect_types": args.defect_types,
-        "seed": args.seed
+        "seed": args.seed,
+        "use_real_defects": args.use_real_defects,
+        "wfdd_path": args.wfdd_path,
+        "pattern_library_path": args.pattern_library_path
     })
     
     # Update video configuration
