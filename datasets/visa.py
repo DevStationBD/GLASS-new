@@ -113,7 +113,7 @@ class VisADataset(torch.utils.data.Dataset):
                                            0 * list(next(iter(self.imgpaths_per_class.values())).values())[0])
 
         self.transform_img = [
-            transforms.Resize(self.resize),
+            transforms.Resize(self.imgsize),  # Resize so largest dimension = imgsize, preserve aspect ratio
             transforms.ColorJitter(brightness_factor, contrast_factor, saturation_factor),
             transforms.RandomHorizontalFlip(h_flip_p),
             transforms.RandomVerticalFlip(v_flip_p),
@@ -122,15 +122,13 @@ class VisADataset(torch.utils.data.Dataset):
                                     translate=(translate, translate),
                                     scale=(1.0 - scale, 1.0 + scale),
                                     interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.imgsize),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ]
         self.transform_img = transforms.Compose(self.transform_img)
 
         self.transform_mask = [
-            transforms.Resize(self.resize),
-            transforms.CenterCrop(self.imgsize),
+            transforms.Resize(self.imgsize),  # Preserve aspect ratio for masks too
             transforms.ToTensor(),
         ]
         self.transform_mask = transforms.Compose(self.transform_mask)
@@ -150,11 +148,10 @@ class VisADataset(torch.utils.data.Dataset):
         aug_idx = np.random.choice(np.arange(len(list_aug)), 3, replace=False)
 
         transform_aug = [
-            transforms.Resize(self.resize),
+            transforms.Resize(self.imgsize),  # Preserve aspect ratio for augmentation too
             list_aug[aug_idx[0]],
             list_aug[aug_idx[1]],
             list_aug[aug_idx[2]],
-            transforms.CenterCrop(self.imgsize),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ]
@@ -175,15 +172,35 @@ class VisADataset(torch.utils.data.Dataset):
                 aug = transform_aug(aug)
             else:
                 aug = self.transform_img(aug)
+            
+            # Always resize aug image to match main image dimensions exactly
+            import torch.nn.functional as F
+            aug = F.interpolate(aug.unsqueeze(0), size=image.shape[1:], mode='bilinear', align_corners=False).squeeze(0)
 
             if self.class_fg:
                 fgmask_path = image_path.split(classname)[0] + 'fg_mask/' + classname + '/' + os.path.split(image_path)[-1]
                 mask_fg = PIL.Image.open(fgmask_path)
                 mask_fg = torch.ceil(self.transform_mask(mask_fg)[0])
 
-            mask_all = perlin_mask(image.shape, self.imgsize // self.downsampling, 0, 6, mask_fg, 1)
-            mask_s = torch.from_numpy(mask_all[0])
-            mask_l = torch.from_numpy(mask_all[1])
+            # Generate perlin mask with square dimensions, then resize to match image shape
+            square_shape = (3, self.imgsize, self.imgsize)  # Use square shape for perlin generation
+            mask_all = perlin_mask(square_shape, self.imgsize // self.downsampling, 0, 6, mask_fg, 1)
+            
+            # Resize masks to match actual image dimensions
+            mask_s_square = torch.from_numpy(mask_all[0])
+            mask_l_square = torch.from_numpy(mask_all[1])
+            
+            # Resize to actual image shape if different from square
+            if image.shape[1:] != (self.imgsize, self.imgsize):
+                import torch.nn.functional as F
+                target_size = image.shape[1:]  # (H, W)
+                mask_s = F.interpolate(mask_s_square.unsqueeze(0).unsqueeze(0), 
+                                     size=target_size, mode='nearest').squeeze()
+                mask_l = F.interpolate(mask_l_square.unsqueeze(0).unsqueeze(0), 
+                                     size=target_size, mode='nearest').squeeze()
+            else:
+                mask_s = mask_s_square
+                mask_l = mask_l_square
 
             beta = np.random.normal(loc=self.mean, scale=self.std)
             beta = np.clip(beta, .2, .8)

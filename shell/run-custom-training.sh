@@ -11,7 +11,8 @@ echo "========================================================"
 # Dataset configuration
 datapath=/home/arif/Projects/GLASS-new/datasets/custom
 augpath=/home/arif/Projects/GLASS-new/datasets/dtd/images
-classes=('grid' 'grid-original')   # Add more class names here
+#classes=('grid' 'grid-original')   # Add more class names here
+classes=('grid-original')   # Add more class names here
 
 # Check dataset root
 if [ ! -d "$datapath" ]; then
@@ -109,6 +110,12 @@ for cls in "${classes[@]}"; do
         --batch_size 8 \
         --resize 384 \
         --imagesize 384 -d "$cls" mvtec $datapath $augpath
+        # Image size options (preserves aspect ratio):
+        # --resize 384 --imagesize 384   # Standard (8GB GPU, faster training)
+        # --resize 448 --imagesize 448   # Balanced (10GB GPU, good quality)
+        # --resize 512 --imagesize 512   # High quality (12GB GPU, better defects)
+        # --resize 768 --imagesize 768   # Maximum (20GB GPU, finest details)
+        # Note: Larger sizes need smaller batch_size if GPU memory limited
 
     if [ $? -eq 0 ]; then
         echo ""

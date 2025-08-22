@@ -38,14 +38,12 @@ class VideoInferenceSideBySide:
         # Load the GLASS model
         self.glass_model = self._load_model()
         
-        # Image preprocessing - match training preprocessing with center crop
-        # Training uses: Resize(resize) → CenterCrop(imagesize) → ToTensor() → Normalize()
-        # For inference, we use a slightly larger resize followed by center crop to match training exactly
-        resize_size = int(self.image_size * 1.1)  # 10% larger for center cropping
+        # Image preprocessing - match training preprocessing with square resize
+        # Training uses: Resize((imgsize, imgsize)) → ToTensor() → Normalize() (square)
+        # Inference matches exactly: force square dimensions
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize(resize_size),
-            transforms.CenterCrop(self.image_size),
+            transforms.Resize((self.image_size, self.image_size)),  # Force square to match training
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
@@ -107,10 +105,13 @@ class VideoInferenceSideBySide:
     
     def preprocess_frame(self, frame, return_transformed_image=False):
         """Preprocess a single frame for inference"""
+        # Store original frame for display
+        original_frame = frame.copy()
+        
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Apply transforms
+        # Apply transforms (this will resize to square for model inference)
         tensor = self.transform(frame_rgb)
         
         # Add batch dimension
@@ -128,9 +129,9 @@ class VideoInferenceSideBySide:
             transformed_image = np.clip(transformed_image * 255, 0, 255).astype(np.uint8)
             transformed_image = cv2.cvtColor(transformed_image, cv2.COLOR_RGB2BGR)
             
-            return tensor, transformed_image
+            return tensor, original_frame, transformed_image
         
-        return tensor
+        return tensor, original_frame
     
     def predict_frame(self, frame_tensor, threshold=0.5):
         """Run inference and defect area analysis on a single frame"""
@@ -231,27 +232,16 @@ class VideoInferenceSideBySide:
         print(f"Total frames: {total_frames}, FPS: {fps}")
         print(f"Frame size: {frame_width}x{frame_height}")
         
-        # Create output video writer (side-by-side width using transformed frame dimensions)
-        # The transformed frame will be image_size x image_size (e.g., 384x384)
+        # Create output video writer - we'll determine dimensions from first transformed frame
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (self.image_size * 2, self.image_size))
-        
-        if not out.isOpened():
-            raise ValueError(f"Could not create output video: {output_path}")
+        out = None  # Initialize later when we know transformed frame dimensions
         
         # Setup live display window if requested
         if show_live:
             window_name = "GLASS Real-time Inference"
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            # Resize window to fit screen better (scale down side-by-side frame)
-            # Use transformed frame dimensions
-            display_width = min(1200, self.image_size * 2)
-            display_height = int(display_width * self.image_size / (self.image_size * 2))
-            cv2.resizeWindow(window_name, display_width, display_height)
-            
             print(f"Live display: Press 'q' to quit, 'p' to pause/resume")
-            print(f"Display window: {display_width}x{display_height}")
-            print(f"Transformed frame size: {self.image_size}x{self.image_size}")
+            print("Display window will be sized after first frame processing")
         
         # Use default threshold of 0.8 if none provided
         if threshold is None:
@@ -277,8 +267,8 @@ class VideoInferenceSideBySide:
                 if not ret:
                     break
                 
-                # Preprocess frame and get transformed image for display
-                frame_tensor, transformed_frame = self.preprocess_frame(frame, return_transformed_image=True)
+                # Preprocess frame and get both original and transformed images for display
+                frame_tensor, original_frame, transformed_frame = self.preprocess_frame(frame, return_transformed_image=True)
                 
                 # Get prediction and defect area analysis
                 inference_start = time.time()
@@ -291,19 +281,34 @@ class VideoInferenceSideBySide:
                 current_fps = frame_count / elapsed_time if elapsed_time > 0 else 0
                 inference_fps = 1.0 / inference_time if inference_time > 0 else 0
                 
-                # Create annotated frame using transformed frame (for proper heatmap alignment)
-                annotated_frame = self.create_annotated_frame(transformed_frame, mask, score, metrics, threshold, inference_fps, current_fps)
+                # Create annotated frame using original frame (preserving aspect ratio)
+                annotated_frame = self.create_annotated_frame(original_frame, mask, score, metrics, threshold, inference_fps, current_fps)
                 
-                # Add labels to frames - use transformed frame instead of original
-                transformed_labeled = transformed_frame.copy()
-                cv2.putText(transformed_labeled, 'Transformed Input', (10, 30), 
+                # Add labels to frames - show original vs detected
+                original_labeled = original_frame.copy()
+                cv2.putText(original_labeled, 'Original Input', (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 
-                cv2.putText(annotated_frame, 'GLASS Detection', (10, self.image_size - 20), 
+                cv2.putText(annotated_frame, 'GLASS Detection', (10, annotated_frame.shape[0] - 20), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 
-                # Create side-by-side frame using transformed input and annotated result
-                sidebyside_frame = np.hstack([transformed_labeled, annotated_frame])
+                # Create side-by-side frame using original input and annotated result
+                sidebyside_frame = np.hstack([original_labeled, annotated_frame])
+                
+                # Initialize video writer on first frame (now we know dimensions)
+                if out is None:
+                    h, w = sidebyside_frame.shape[:2]
+                    out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+                    if not out.isOpened():
+                        raise ValueError(f"Could not create output video: {output_path}")
+                    print(f"Output video dimensions: {w}x{h}")
+                    
+                    # Setup display window size now that we know frame dimensions
+                    if show_live:
+                        display_width = min(1200, w)
+                        display_height = int(display_width * h / w)
+                        cv2.resizeWindow(window_name, display_width, display_height)
+                        print(f"Display window: {display_width}x{display_height}")
                 
                 # Write frame to output video
                 out.write(sidebyside_frame)
