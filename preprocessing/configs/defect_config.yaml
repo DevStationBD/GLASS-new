@@ -1,0 +1,87 @@
+# GLASS Defect Simulator Configuration
+# This file defines parameters for simulating various fabric defects
+
+# Global visibility settings
+visibility:
+  min_contrast_threshold: 50.0    # Minimum perceptual contrast (Delta E)
+  min_visibility_score: 0.3       # Minimum visibility score (0-1)
+
+# Random seed for reproducibility
+seed: 42
+
+# Defect type configurations
+defects:
+  hole:
+    min_size: 2
+    max_size: 8
+    min_count: 1
+    max_count: 3
+    intensity: 0.6
+    opacity: 0.8
+    color_variation: 0.1
+    description: "Circular/irregular missing fabric areas"
+    
+  foreign_yarn:
+    min_size: 1
+    max_size: 2
+    min_count: 3
+    max_count: 8
+    intensity: 0.5
+    opacity: 0.6
+    color_variation: 0.8
+    description: "Different colored threads in fabric"
+    
+  missing_yarn:
+    min_size: 1
+    max_size: 3
+    min_count: 1
+    max_count: 3
+    intensity: 0.4
+    opacity: 0.7
+    color_variation: 0.2
+    description: "Linear gaps where threads should be"
+    
+  slab:
+    min_size: 2
+    max_size: 6
+    min_count: 2
+    max_count: 5
+    intensity: 0.3
+    opacity: 0.5
+    color_variation: 0.4
+    description: "Thick yarn sections with uneven texture"
+    
+  spot:
+    min_size: 3
+    max_size: 10
+    min_count: 1
+    max_count: 2
+    intensity: 0.4
+    opacity: 0.6
+    color_variation: 0.6
+    description: "Stains and contamination marks"
+
+# Dataset generation settings
+dataset:
+  images_per_defect: 50
+  defect_types: ["hole", "foreign_yarn", "missing_yarn", "slab", "spot"]
+
+# Color palettes for different defect types
+color_palettes:
+  foreign_yarn:
+    - [255, 0, 0]    # Red
+    - [0, 255, 0]    # Green
+    - [0, 0, 255]    # Blue
+    - [255, 255, 0]  # Yellow
+    - [255, 0, 255]  # Magenta
+    - [0, 255, 255]  # Cyan
+    - [255, 128, 0]  # Orange
+    - [128, 0, 255]  # Purple
+    
+  spot:
+    - [139, 69, 19]   # Brown (dirt)
+    - [85, 85, 85]    # Dark gray (oil)
+    - [160, 82, 45]   # Saddle brown
+    - [105, 105, 105] # Dim gray
+    - [128, 128, 0]   # Olive (stain)
+    - [75, 0, 130]    # Indigo (ink)

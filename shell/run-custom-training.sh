@@ -12,7 +12,7 @@ echo "========================================================"
 datapath=/home/arif/Projects/GLASS-new/datasets/custom
 augpath=/home/arif/Projects/GLASS-new/datasets/dtd/images
 #classes=('grid' 'grid-original')   # Add more class names here
-classes=('grid-original')   # Add more class names here
+classes=('grid-visible')   # Add more class names here
 
 # Check dataset root
 if [ ! -d "$datapath" ]; then

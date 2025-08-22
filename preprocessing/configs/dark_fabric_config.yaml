@@ -1,0 +1,87 @@
+# Configuration optimized for dark colored fabrics
+# Lower contrast requirements with bright defect colors
+
+# Global visibility settings
+visibility:
+  min_contrast_threshold: 40.0    # Lower contrast threshold for dark fabrics
+  min_visibility_score: 0.3       # Standard visibility requirement
+
+# Random seed for reproducibility
+seed: 42
+
+# Defect type configurations - adjusted for dark fabrics
+defects:
+  hole:
+    min_size: 4
+    max_size: 16
+    min_count: 2
+    max_count: 4
+    intensity: 0.5
+    opacity: 0.7
+    color_variation: 0.1
+    description: "Very dark holes on dark fabric"
+    
+  foreign_yarn:
+    min_size: 2
+    max_size: 4
+    min_count: 3
+    max_count: 8
+    intensity: 0.6
+    opacity: 0.7
+    color_variation: 1.0
+    description: "Bright colored threads on dark fabric"
+    
+  missing_yarn:
+    min_size: 2
+    max_size: 4
+    min_count: 2
+    max_count: 4
+    intensity: 0.4
+    opacity: 0.6
+    color_variation: 0.2
+    description: "Lighter gaps on dark fabric"
+    
+  slab:
+    min_size: 3
+    max_size: 6
+    min_count: 2
+    max_count: 5
+    intensity: 0.4
+    opacity: 0.6
+    color_variation: 0.5
+    description: "Lighter thick sections on dark fabric"
+    
+  spot:
+    min_size: 5
+    max_size: 10
+    min_count: 1
+    max_count: 4
+    intensity: 0.5
+    opacity: 0.7
+    color_variation: 0.7
+    description: "Light colored stains on dark fabric"
+
+# Dataset generation settings
+dataset:
+  images_per_defect: 50
+  defect_types: ["hole", "foreign_yarn", "missing_yarn", "slab", "spot"]
+
+# Color palettes optimized for dark fabrics (brighter colors)
+color_palettes:
+  foreign_yarn:
+    - [255, 100, 100]  # Bright red
+    - [100, 255, 100]  # Bright green
+    - [100, 100, 255]  # Bright blue
+    - [255, 255, 100]  # Bright yellow
+    - [255, 100, 255]  # Bright magenta
+    - [100, 255, 255]  # Bright cyan
+    - [255, 200, 100]  # Bright orange
+    - [255, 255, 255]  # White
+    
+  spot:
+    - [200, 150, 100]  # Light brown
+    - [180, 180, 180]  # Light gray
+    - [220, 180, 150]  # Light saddle brown
+    - [200, 200, 200]  # Lighter gray
+    - [200, 200, 100]  # Light olive
+    - [150, 100, 200]  # Light purple

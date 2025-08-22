@@ -1,0 +1,88 @@
+# High quality configuration for critical applications
+# Maximum visibility requirements and fine-tuned parameters
+
+# Global visibility settings
+visibility:
+  min_contrast_threshold: 80.0    # Very high contrast requirement
+  min_visibility_score: 0.6       # High visibility requirement
+
+# Random seed for reproducibility
+seed: 42
+
+# Defect type configurations - optimized for high quality detection
+defects:
+  hole:
+    min_size: 4
+    max_size: 12
+    min_count: 1
+    max_count: 2
+    intensity: 0.9
+    opacity: 0.95
+    color_variation: 0.05
+    description: "High contrast holes for critical detection"
+    
+  foreign_yarn:
+    min_size: 2
+    max_size: 3
+    min_count: 2
+    max_count: 5
+    intensity: 0.8
+    opacity: 0.9
+    color_variation: 1.0
+    description: "High contrast foreign threads"
+    
+  missing_yarn:
+    min_size: 2
+    max_size: 5
+    min_count: 1
+    max_count: 2
+    intensity: 0.7
+    opacity: 0.85
+    color_variation: 0.1
+    description: "High contrast missing yarns"
+    
+  slab:
+    min_size: 4
+    max_size: 10
+    min_count: 1
+    max_count: 3
+    intensity: 0.6
+    opacity: 0.8
+    color_variation: 0.2
+    description: "High contrast thick sections"
+    
+  spot:
+    min_size: 5
+    max_size: 15
+    min_count: 1
+    max_count: 2
+    intensity: 0.7
+    opacity: 0.85
+    color_variation: 0.4
+    description: "High contrast spots and stains"
+
+# Dataset generation settings - more samples for high quality
+dataset:
+  images_per_defect: 100  # More samples for better training
+  defect_types: ["hole", "foreign_yarn", "missing_yarn", "slab", "spot"]
+
+# Color palettes optimized for maximum contrast
+color_palettes:
+  foreign_yarn:
+    - [255, 0, 0]      # Pure red
+    - [0, 255, 0]      # Pure green
+    - [0, 0, 255]      # Pure blue
+    - [255, 255, 0]    # Pure yellow
+    - [255, 0, 255]    # Pure magenta
+    - [0, 255, 255]    # Pure cyan
+    - [255, 128, 0]    # Orange
+    - [0, 0, 0]        # Black
+    - [255, 255, 255]  # White
+    
+  spot:
+    - [0, 0, 0]        # Black
+    - [255, 255, 255]  # White
+    - [139, 69, 19]    # Brown
+    - [255, 0, 0]      # Red
+    - [0, 0, 255]      # Blue
+    - [128, 0, 128]    # Purple

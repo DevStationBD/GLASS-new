@@ -69,7 +69,10 @@ class DatasetOrchestrator:
             "train_ratio": 0.8,
             "images_per_defect": 50,
             "defect_types": ["hole", "foreign_yarn", "missing_yarn", "slab", "spot"],
-            "seed": 42
+            "seed": 42,
+            # Enhanced defect simulator visibility parameters
+            "min_contrast_threshold": 50.0,
+            "min_visibility_score": 0.3
         }
         
         # Video configuration
@@ -199,8 +202,14 @@ class DatasetOrchestrator:
             "--output", str(output_dir),
             "--defect_types"] + self.config["defect_types"] + [
             "--images_per_defect", str(self.config["images_per_defect"]),
-            "--seed", str(self.config["seed"])
+            "--seed", str(self.config["seed"]),
+            "--min_contrast_threshold", str(self.config["min_contrast_threshold"]),
+            "--min_visibility_score", str(self.config["min_visibility_score"])
         ]
+        
+        # Add config file if specified
+        if hasattr(self, 'defect_config_file') and self.defect_config_file:
+            args.extend(["--config", self.defect_config_file])
         
         success = self.run_script("defect_simulator.py", args)
         if success:
@@ -578,6 +587,14 @@ def main():
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed (default: 42)")
     
+    # Enhanced defect simulator visibility parameters
+    parser.add_argument("--min_contrast_threshold", type=float, default=50.0,
+                       help="Minimum perceptual contrast threshold for defect visibility (default: 50.0)")
+    parser.add_argument("--min_visibility_score", type=float, default=0.3,
+                       help="Minimum visibility score for defects (0-1, default: 0.3)")
+    parser.add_argument("--defect_config", type=str, default="dark_fabric_config.yaml",
+                       help="Path to defect configuration file (YAML format, default: dark_fabric_config.yaml)")
+    
     # Video configuration
     parser.add_argument("--video_fps", type=int, default=1,
                        help="Video FPS (default: 1 = 1 second per image)")
@@ -602,13 +619,18 @@ def main():
         base_output_dir=args.output_dir
     )
     
+    # Store defect config file path
+    orchestrator.defect_config_file = args.defect_config
+    
     # Update configuration
     orchestrator.config.update({
         "image_size": args.image_size,
         "train_ratio": args.train_ratio,
         "images_per_defect": args.images_per_defect,
         "defect_types": args.defect_types,
-        "seed": args.seed
+        "seed": args.seed,
+        "min_contrast_threshold": args.min_contrast_threshold,
+        "min_visibility_score": args.min_visibility_score
     })
     
     # Update video configuration

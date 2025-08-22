@@ -1,0 +1,87 @@
+# Configuration optimized for light colored fabrics
+# Higher contrast requirements to ensure defect visibility
+
+# Global visibility settings
+visibility:
+  min_contrast_threshold: 60.0    # Higher contrast for light fabrics
+  min_visibility_score: 0.4       # Higher visibility requirement
+
+# Random seed for reproducibility
+seed: 42
+
+# Defect type configurations - adjusted for light fabrics
+defects:
+  hole:
+    min_size: 3
+    max_size: 10
+    min_count: 1
+    max_count: 2
+    intensity: 0.8
+    opacity: 0.9
+    color_variation: 0.1
+    description: "Dark holes on light fabric"
+    
+  foreign_yarn:
+    min_size: 1
+    max_size: 3
+    min_count: 2
+    max_count: 6
+    intensity: 0.7
+    opacity: 0.8
+    color_variation: 0.9
+    description: "Bright colored threads on light fabric"
+    
+  missing_yarn:
+    min_size: 1
+    max_size: 4
+    min_count: 1
+    max_count: 2
+    intensity: 0.6
+    opacity: 0.8
+    color_variation: 0.2
+    description: "Dark gaps on light fabric"
+    
+  slab:
+    min_size: 3
+    max_size: 8
+    min_count: 1
+    max_count: 3
+    intensity: 0.5
+    opacity: 0.7
+    color_variation: 0.3
+    description: "Thick dark sections on light fabric"
+    
+  spot:
+    min_size: 4
+    max_size: 12
+    min_count: 1
+    max_count: 2
+    intensity: 0.6
+    opacity: 0.8
+    color_variation: 0.5
+    description: "Dark stains on light fabric"
+
+# Dataset generation settings
+dataset:
+  images_per_defect: 50
+  defect_types: ["hole", "foreign_yarn", "missing_yarn", "slab", "spot"]
+
+# Color palettes optimized for light fabrics (darker colors)
+color_palettes:
+  foreign_yarn:
+    - [200, 0, 0]    # Dark red
+    - [0, 150, 0]    # Dark green
+    - [0, 0, 200]    # Dark blue
+    - [180, 180, 0]  # Dark yellow
+    - [150, 0, 150]  # Dark magenta
+    - [100, 50, 0]   # Brown
+    - [50, 0, 100]   # Dark purple
+    - [0, 0, 0]      # Black
+    
+  spot:
+    - [100, 50, 20]   # Dark brown
+    - [60, 60, 60]    # Dark gray
+    - [80, 40, 20]    # Dark saddle brown
+    - [50, 50, 50]    # Darker gray
+    - [80, 80, 0]     # Dark olive
+    - [40, 0, 80]     # Dark indigo
