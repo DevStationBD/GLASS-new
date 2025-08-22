@@ -107,7 +107,7 @@ for cls in "${classes[@]}"; do
         --std 0.1 \
         --fg 0 \
         --rand_aug 1 \
-        --batch_size 8 \
+        --batch_size 10 \
         --resize 384 \
         --imagesize 384 -d "$cls" mvtec $datapath $augpath
         # Image size options (preserves aspect ratio):

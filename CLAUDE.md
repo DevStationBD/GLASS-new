@@ -335,12 +335,22 @@ GLASS-new/
 - **Hyperparameters**: Default values optimized for MVTec AD
 - **Distribution Detection**: Automatic analysis determines manifold vs hypersphere training
 
-## Testing Notes
+## Testing and Validation
 
-This codebase has no explicit test framework. Validation occurs through:
+This codebase has no explicit unit test framework. Validation occurs through:
 - Cross-validation during training (`eval_epochs` parameter)
 - Benchmark evaluation against standard datasets
 - Visual inspection of generated anomaly maps
+- Size analyzer validation: `python size_analyzer/test_defect_size_analysis.py`
+
+### Single Class Training/Testing
+For testing individual classes or during development:
+```bash
+# Train/test single class (modify classes array in shell script)
+bash shell/run-custom-training.sh  # For custom datasets
+# Or run directly:
+python main.py --test ckpt net -b wideresnet50 -le layer2 -le layer3 dataset -d classname mvtec /path/to/data /path/to/dtd
+```
 
 ## File Modifications
 
