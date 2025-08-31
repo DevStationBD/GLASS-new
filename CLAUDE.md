@@ -103,6 +103,57 @@ python onnx/ort.py  # Run ONNX inference
 ```
 
 ### Video Inference
+
+#### 🤖 Automatic Model Selection (NEW - Recommended)
+The **Inference Orchestrator** automatically selects the best model for your video:
+
+```bash
+# Automatic model selection and inference (simplest approach)
+python inference/inference_orchestrator.py \
+    --video_path input_video.mp4
+
+# List all available trained models  
+python inference/inference_orchestrator.py --list_models
+
+# Custom evaluation settings
+python inference/inference_orchestrator.py \
+    --video_path input_video.mp4 \
+    --sample_frames 50 \
+    --device cuda:0
+```
+
+**How it works**: Tests all available models on sample frames, selects the one with lowest average anomaly score (best fit), then runs full inference automatically.
+
+#### 🎯 Advanced Defect Tracking (NEW)
+Enterprise-grade defect tracking with temporal persistence:
+
+```bash
+# Defect tracking with organized output (recommended)
+python inference/video_inference_with_tracking.py \
+    --model_path results/models/backbone_0/ \
+    --class_name mvtec_grid-test \
+    --video_path input_video.mp4
+
+# Manual output paths (if needed)
+python inference/video_inference_with_tracking.py \
+    --model_path results/models/backbone_0/ \
+    --class_name mvtec_grid-test \
+    --video_path input_video.mp4 \
+    --output_path output.mp4 \
+    --no_organized_output
+```
+
+**Features**: Tracks defects across frames, saves one representative frame per defect, provides comprehensive tracking reports with physical measurements.
+
+**Organized Output Structure**:
+```
+output/[class-name]/[timestamp]/
+├── output-video/          # Inference videos
+├── defects/              # Individual defect frames with track IDs
+└── report/               # JSON tracking and selection reports
+```
+
+#### Traditional Video Inference
 Run inference on video files using trained GLASS models:
 
 ```bash
@@ -130,7 +181,7 @@ python inference/video_inference_with_size.py \
     --pixel_size 0.1 \
     --physical_unit mm
 
-# Clean inference without text overlays (New)
+# Clean inference without text overlays
 python inference/video_inference_clean.py \
     --model_path results/models/backbone_0/ \
     --class_name mvtec_grid \
@@ -383,8 +434,10 @@ GLASS-new/
 │   ├── WFDD/          # WFDD dataset
 │   └── dtd/           # DTD texture dataset for augmentation
 ├── inference/          # Video inference scripts
-│   ├── video_inference_with_tracking.py    # Defect tracking inference (recommended)
+│   ├── inference_orchestrator.py           # 🤖 NEW: Automatic model selection (recommended)
+│   ├── video_inference_with_tracking.py    # 🎯 NEW: Defect tracking inference
 │   ├── video_inference_sidebyside.py       # Side-by-side inference  
+│   ├── video_inference_clean.py            # Clean inference without overlays
 │   ├── video_inference.py                  # Basic video inference
 │   ├── video_inference_with_size.py        # Inference with size analysis
 │   ├── run_video_inference.py              # Easy wrapper script

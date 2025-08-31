@@ -6,11 +6,29 @@ This directory contains all inference-related scripts for the GLASS (Global and 
 
 ### Core Inference Scripts
 
+**`inference_orchestrator.py`** - 🤖 **NEW** Automatic model selection with inference
+- **Smart Model Selection**: Automatically tests all available models and selects the best one
+- **Lowest Anomaly Score**: Chooses model with lowest average anomaly score (best fit)
+- **Organized Output**: Creates structured output with timestamps and reports
+- **One-Command Solution**: No need to specify model or class manually
+
+**`video_inference_with_tracking.py`** - 🎯 **NEW** Advanced tracking with defect persistence
+- **Temporal Defect Tracking**: Tracks same defects across multiple frames
+- **Motion Compensation**: Fabric movement estimation using optical flow
+- **Physical Measurements**: Real-world defect size calculations
+- **Individual Frame Extraction**: Saves one representative frame per tracked defect
+- **Organized Output**: Automatic directory structure with timestamps
+
 **`video_inference_sidebyside.py`** - Main video inference script with side-by-side display
 - Creates side-by-side videos showing original and anomaly detection results
 - Includes defect size analysis and real-time metrics
 - Supports live display during processing
 - Most comprehensive inference script
+
+**`video_inference_clean.py`** - Clean inference without text overlays
+- Clean output videos without annotations for presentations
+- Adjustable intensity settings for defect highlighting
+- Professional output for demonstrations
 
 **`video_inference.py`** - Basic video inference script
 - Simple video processing with anomaly detection
@@ -29,7 +47,41 @@ This directory contains all inference-related scripts for the GLASS (Global and 
 
 ## Usage Examples
 
-### Side-by-Side Video Inference (Recommended)
+### 🤖 Automatic Model Selection (NEW - Recommended)
+```bash
+# Orchestrator automatically selects best model and runs inference
+python inference/inference_orchestrator.py \
+    --video_path input_video.mp4
+
+# List all available trained models
+python inference/inference_orchestrator.py --list_models
+
+# Custom settings
+python inference/inference_orchestrator.py \
+    --video_path input_video.mp4 \
+    --sample_frames 50 \
+    --device cuda:0
+```
+
+### 🎯 Advanced Tracking with Defect Persistence (NEW)
+```bash
+# Defect tracking with organized output (all defaults enabled)
+python inference/video_inference_with_tracking.py \
+    --model_path results/models/backbone_0/ \
+    --class_name mvtec_grid-test \
+    --video_path input_video.mp4
+
+# Disable organized output (use manual paths)
+python inference/video_inference_with_tracking.py \
+    --model_path results/models/backbone_0/ \
+    --class_name mvtec_grid-test \
+    --video_path input_video.mp4 \
+    --output_path output.mp4 \
+    --no_organized_output \
+    --no_save_defect_frames
+```
+
+### Side-by-Side Video Inference
 ```bash
 python inference/video_inference_sidebyside.py \
     --model_path results/models/backbone_0/ \
@@ -176,3 +228,34 @@ For accurate size measurements:
 1. Calibrate pixel size using known reference objects
 2. Use consistent units across measurements
 3. Validate measurements with manual verification
+
+## 🆕 New Features Overview
+
+### Automatic Model Selection
+The **Inference Orchestrator** (`inference_orchestrator.py`) eliminates the need to manually specify models:
+- Tests all available trained models on sample frames
+- Selects model with **lowest average anomaly score** (best fit for the video content)
+- Automatically runs full inference with selected model
+- Provides comprehensive selection reports
+
+### Advanced Defect Tracking
+The **Tracking Inference** (`video_inference_with_tracking.py`) provides enterprise-grade defect monitoring:
+- **Temporal Tracking**: Follows defects across frames using ByteTrack algorithm
+- **Motion Compensation**: Accounts for fabric movement during inspection
+- **Smart Frame Extraction**: Saves one representative frame per tracked defect (middle frame)
+- **Physical Measurements**: Real-world defect size calculations
+- **Organized Output**: Automatic directory structure with timestamps
+
+### Organized Output Structure
+Both new scripts create structured output directories:
+```
+output/[class-name]/[timestamp]/
+├── output-video/          # Inference videos
+├── defects/              # Individual defect frames with annotations
+└── report/               # JSON tracking and selection reports
+```
+
+### Enhanced Annotations
+- **Semi-transparent overlays**: Info panels with 30% opacity to preserve fabric visibility
+- **Defect-specific annotations**: Track IDs displayed directly on detected defects
+- **Comprehensive tracking data**: Confidence scores, physical measurements, temporal statistics
