@@ -248,8 +248,8 @@ class GLASSDefectTracker:
         """Get summary of all tracked defects"""
         summaries = []
         
-        # Include both active and completed tracks
-        all_tracks = self.all_tracks + self.completed_tracks
+        # Use only all_tracks since completed tracks are already included
+        all_tracks = self.all_tracks
         
         for track in all_tracks:
             if len(track.detections) == 0:
