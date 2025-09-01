@@ -93,11 +93,11 @@ class FabricByteTracker:
     
     def __init__(self, 
                  initial_fabric_speed: float = 5.0,  # Now just an arbitrary starting point
-                 high_conf_threshold: float = 0.7,
-                 low_conf_threshold: float = 0.3,
-                 max_lost_frames: int = 10,
-                 iou_threshold: float = 0.3,
-                 motion_penalty_weight: float = 0.2):
+                 high_conf_threshold: float = 0.6,
+                 low_conf_threshold: float = 0.2,
+                 max_lost_frames: int = 15,
+                 iou_threshold: float = 0.2,
+                 motion_penalty_weight: float = 0.1):
         """
         Initialize fabric defect tracker with adaptive speed estimation
         

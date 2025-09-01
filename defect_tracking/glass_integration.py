@@ -244,14 +244,93 @@ class GLASSDefectTracker:
         logger.debug(f"  - Total tracks created: {self.tracker.total_tracks_created}")
         logger.debug(f"  - Completed tracks: {len(self.completed_tracks)}")
     
+    def _merge_fragmented_tracks(self, tracks: List[DefectTrack]) -> List[DefectTrack]:
+        """Merge tracks that are likely fragments of the same physical defect"""
+        if len(tracks) <= 1:
+            return tracks.copy()
+        
+        # Sort tracks by first frame
+        sorted_tracks = sorted(tracks, key=lambda t: t.first_frame)
+        merged_tracks = []
+        used_track_ids = set()
+        
+        for i, track1 in enumerate(sorted_tracks):
+            if track1.track_id in used_track_ids:
+                continue
+                
+            # Start with current track
+            merged_track = track1
+            used_track_ids.add(track1.track_id)
+            
+            # Look for nearby tracks that could be the same defect
+            for j, track2 in enumerate(sorted_tracks[i+1:], i+1):
+                if track2.track_id in used_track_ids:
+                    continue
+                
+                # Check if tracks are close in time and space
+                if self._should_merge_tracks(track1, track2):
+                    # Merge track2 into track1
+                    merged_track = self._merge_two_tracks(merged_track, track2)
+                    used_track_ids.add(track2.track_id)
+                    logger.debug(f"Merged track {track2.track_id} into {track1.track_id}")
+            
+            merged_tracks.append(merged_track)
+        
+        logger.info(f"Track merging: {len(tracks)} → {len(merged_tracks)} defects")
+        return merged_tracks
+    
+    def _should_merge_tracks(self, track1: DefectTrack, track2: DefectTrack) -> bool:
+        """Determine if two tracks should be merged as the same physical defect"""
+        # Only merge very short tracks (likely fragmentation)
+        if track1.duration_frames > 5 and track2.duration_frames > 5:
+            return False
+        
+        # Check temporal proximity (within 20 frames)
+        time_gap = abs(track1.first_frame - track2.last_frame)
+        if time_gap > 20:
+            return False
+        
+        # Check spatial proximity at fabric level
+        pos1 = track1.fabric_start_position
+        pos2 = track2.fabric_start_position
+        
+        # Defects should be close in fabric position (~50 pixels considering fabric movement)
+        spatial_distance = abs(pos1 - pos2)
+        fabric_distance_threshold = 50.0  # pixels
+        
+        return spatial_distance < fabric_distance_threshold
+    
+    def _merge_two_tracks(self, track1: DefectTrack, track2: DefectTrack) -> DefectTrack:
+        """Merge two tracks into one, keeping track1 as base"""
+        # Create new merged track with track1 as base
+        merged_track = DefectTrack(
+            track_id=track1.track_id,  # Keep original ID
+            state=track1.state,
+            age=track1.age,
+            fabric_start_position=min(track1.fabric_start_position, track2.fabric_start_position),
+            kalman_filter=track1.kalman_filter,
+            last_prediction=track1.last_prediction
+        )
+        
+        # Combine all detections and sort by frame
+        all_detections = track1.detections + track2.detections
+        all_detections.sort(key=lambda d: d.frame_id)
+        
+        # Add all detections to merged track
+        for detection in all_detections:
+            merged_track.add_detection(detection)
+        
+        return merged_track
+    
     def get_tracked_defect_summaries(self) -> List[TrackedDefectSummary]:
         """Get summary of all tracked defects"""
         summaries = []
         
         # Use only all_tracks since completed tracks are already included
-        all_tracks = self.all_tracks
+        # Apply post-processing to merge fragmented tracks that are likely the same defect
+        merged_tracks = self._merge_fragmented_tracks(self.all_tracks)
         
-        for track in all_tracks:
+        for track in merged_tracks:
             if len(track.detections) == 0:
                 continue
             
