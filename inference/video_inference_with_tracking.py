@@ -18,6 +18,8 @@ from datetime import datetime
 from tqdm import tqdm
 import time
 import logging
+import gc
+import psutil
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,7 +52,8 @@ class VideoInferenceWithTracking:
                  physical_unit: str = "mm",
                  fabric_speed_estimate: float = 5.0,
                  save_defect_frames: bool = True,
-                 use_organized_output: bool = True):
+                 use_organized_output: bool = True,
+                 show_preview: bool = True):
         """Initialize tracking-enabled video inference"""
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.class_name = class_name
@@ -60,14 +63,18 @@ class VideoInferenceWithTracking:
         self.physical_unit = physical_unit
         self.save_defect_frames = save_defect_frames
         self.use_organized_output = use_organized_output
+        self.show_preview = show_preview
         
         # Initialize organized output directories
         self.output_base_dir = None
         self.defect_frames_dir = None
         
-        # Track saved frames - one per defect at middle position
+        # Memory-efficient defect tracking
         self.saved_track_frames = set()
         self.track_frame_counts = {}  # Track ID -> list of frame numbers
+        self.track_middle_frames = {}  # Track ID -> current middle frame data
+        self.max_stored_tracks = 50   # Maximum concurrent tracks to store frames for
+        self.completed_tracks = set()  # Track IDs that have been completed and saved
         
         # Load GLASS model
         self.glass_model = self._load_model()
@@ -176,7 +183,7 @@ class VideoInferenceWithTracking:
         return anomaly_map, anomaly_score
     
     def _save_defect_frames(self, frame: np.ndarray, active_tracks: list, frame_count: int, anomaly_map: np.ndarray):
-        """Save individual frames for each tracked defect with annotations"""
+        """Memory-efficient defect frame tracking - only stores current middle frames"""
         if not self.save_defect_frames or not active_tracks:
             return
             
@@ -188,59 +195,143 @@ class VideoInferenceWithTracking:
                 self.track_frame_counts[track_id] = []
             self.track_frame_counts[track_id].append(frame_count)
             
-            # Store frame data for later middle-frame extraction
-            if not hasattr(self, 'stored_frames'):
-                self.stored_frames = {}
+            # Calculate current middle frame index
+            current_frames = self.track_frame_counts[track_id]
+            middle_idx = len(current_frames) // 2
+            middle_frame_num = current_frames[middle_idx]
             
-            self.stored_frames[f"{track_id}_{frame_count}"] = {
-                'frame': frame.copy(),
-                'track': track,
-                'frame_count': frame_count,
-                'anomaly_map': anomaly_map.copy()
-            }
+            # Only store/update if this is the new middle frame
+            if frame_count == middle_frame_num:
+                # Clean up old middle frame data if exists
+                if track_id in self.track_middle_frames:
+                    old_data = self.track_middle_frames[track_id]
+                    # Explicitly delete large arrays
+                    if 'frame' in old_data:
+                        del old_data['frame']
+                    if 'anomaly_map' in old_data:
+                        del old_data['anomaly_map']
+                    del old_data
+                
+                # Store new middle frame (only one per track)
+                self.track_middle_frames[track_id] = {
+                    'frame': frame.copy(),
+                    'track': track, 
+                    'frame_count': frame_count,
+                    'anomaly_map': anomaly_map.copy(),
+                    'middle_frame_num': middle_frame_num
+                }
+            
+        # Memory safety: enforce maximum stored tracks
+        if len(self.track_middle_frames) > self.max_stored_tracks:
+            logger.warning(f"Reached maximum stored tracks ({self.max_stored_tracks}). Cleaning up oldest tracks.")
+            self._cleanup_oldest_stored_frames()
+            
+        # Clean up completed tracks immediately
+        self._save_and_cleanup_completed_tracks()
     
-    def _save_middle_frames_for_completed_tracks(self):
-        """Save middle frame for each completed track"""
+    def _cleanup_oldest_stored_frames(self):
+        """Remove oldest stored frames to free memory"""
+        if len(self.track_middle_frames) <= self.max_stored_tracks:
+            return
+            
+        # Sort by frame count (older frames first)
+        sorted_tracks = sorted(self.track_middle_frames.items(), 
+                             key=lambda x: x[1]['frame_count'])
+        
+        # Remove oldest frames until we're under the limit
+        num_to_remove = len(self.track_middle_frames) - self.max_stored_tracks
+        for i in range(num_to_remove):
+            track_id, frame_data = sorted_tracks[i]
+            
+            # Clean up memory
+            del frame_data['frame']
+            del frame_data['anomaly_map']
+            del self.track_middle_frames[track_id]
+            
+            logger.debug(f"Cleaned up stored frame for track {track_id} due to memory limit")
+    
+    def _save_and_cleanup_completed_tracks(self):
+        """Save and immediately clean up completed tracks"""
         if not self.save_defect_frames:
             return
             
+        # Get current active track IDs
+        current_active_tracks = set()
         defect_summaries = self.defect_tracker.get_tracked_defect_summaries()
-        
         for summary in defect_summaries:
-            track_id = summary.track_id
+            if summary.track_id in self.track_middle_frames:
+                current_active_tracks.add(summary.track_id)
+        
+        # Find completed tracks that have stored frames but are no longer active
+        completed_tracks = []
+        for track_id in list(self.track_middle_frames.keys()):
+            # If we have a stored frame but the track is not in summaries, it's completed
+            if track_id not in current_active_tracks and track_id not in self.completed_tracks:
+                completed_tracks.append(track_id)
+        
+        # Save and cleanup completed tracks immediately
+        for track_id in completed_tracks:
+            if track_id in self.track_middle_frames:
+                frame_data = self.track_middle_frames[track_id]
+                
+                # Create and save annotated frame
+                annotated_frame = self._create_defect_frame_annotation(
+                    frame_data['frame'], 
+                    frame_data['track'], 
+                    frame_data['frame_count'], 
+                    frame_data['anomaly_map']
+                )
+                
+                # Save with track ID in filename
+                filename = f"track_{track_id:03d}_middle_frame_{frame_data['middle_frame_num']:06d}.jpg"
+                output_path = os.path.join(self.defect_frames_dir, filename)
+                
+                success = cv2.imwrite(output_path, annotated_frame)
+                if success:
+                    logger.info(f"💾 Saved completed track frame: {filename}")
+                    self.completed_tracks.add(track_id)
+                    
+                    # Clean up memory immediately  
+                    del frame_data['frame']
+                    del frame_data['anomaly_map']
+                    del self.track_middle_frames[track_id]
+                else:
+                    logger.warning(f"Failed to save defect frame: {filename}")
+    
+    def _save_middle_frames_for_completed_tracks(self):
+        """Save any remaining middle frames that weren't saved during processing"""
+        if not self.save_defect_frames:
+            return
             
-            # Skip if already saved
-            if track_id in self.saved_track_frames:
-                continue
+        # Save any remaining middle frames that are still in memory
+        remaining_tracks = list(self.track_middle_frames.keys())
+        for track_id in remaining_tracks:
+            if track_id not in self.completed_tracks:
+                frame_data = self.track_middle_frames[track_id]
                 
-            # Find middle frame
-            if track_id in self.track_frame_counts:
-                frame_numbers = self.track_frame_counts[track_id]
-                middle_frame_num = frame_numbers[len(frame_numbers) // 2]
+                # Create and save annotated frame
+                annotated_frame = self._create_defect_frame_annotation(
+                    frame_data['frame'], 
+                    frame_data['track'], 
+                    frame_data['frame_count'], 
+                    frame_data['anomaly_map']
+                )
                 
-                # Get stored frame data
-                frame_key = f"{track_id}_{middle_frame_num}"
-                if frame_key in self.stored_frames:
-                    frame_data = self.stored_frames[frame_key]
+                # Save with track ID in filename
+                filename = f"track_{track_id:03d}_middle_frame_{frame_data['middle_frame_num']:06d}.jpg"
+                output_path = os.path.join(self.defect_frames_dir, filename)
+                
+                success = cv2.imwrite(output_path, annotated_frame)
+                if success:
+                    logger.info(f"💾 Saved final track frame: {filename}")
+                    self.completed_tracks.add(track_id)
                     
-                    # Create annotated frame
-                    annotated_frame = self._create_defect_frame_annotation(
-                        frame_data['frame'], 
-                        frame_data['track'], 
-                        frame_data['frame_count'], 
-                        frame_data['anomaly_map']
-                    )
-                    
-                    # Save frame with track ID in filename
-                    filename = f"track_{track_id:03d}_middle_frame_{middle_frame_num:06d}.jpg"
-                    output_path = os.path.join(self.defect_frames_dir, filename)
-                    
-                    success = cv2.imwrite(output_path, annotated_frame)
-                    if success:
-                        logger.info(f"Saved middle defect frame: {filename}")
-                        self.saved_track_frames.add(track_id)
-                    else:
-                        logger.warning(f"Failed to save defect frame: {filename}")
+                    # Clean up memory
+                    del frame_data['frame']
+                    del frame_data['anomaly_map'] 
+                    del self.track_middle_frames[track_id]
+                else:
+                    logger.warning(f"Failed to save final defect frame: {filename}")
     
     def _create_defect_frame_annotation(self, frame: np.ndarray, track, frame_count: int, anomaly_map: np.ndarray):
         """Create annotated frame with track information"""
@@ -423,6 +514,13 @@ class VideoInferenceWithTracking:
         
         pbar = tqdm(total=total_frames, desc="Processing frames")
         
+        # Setup preview window if enabled
+        if self.show_preview:
+            window_name = f"GLASS Real-time Inference - {self.class_name}"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, min(1920, width * 2), min(1080, height))
+            logger.info(f"📺 Live preview enabled: Press 'q' to quit, 's' to skip preview")
+        
         try:
             while True:
                 ret, frame = cap.read()
@@ -445,16 +543,68 @@ class VideoInferenceWithTracking:
                 vis_frame = self._create_visualization(frame, anomaly_map, active_tracks, motion_estimate, frame_count)
                 out.write(vis_frame)
                 
+                # Display real-time preview
+                if self.show_preview:
+                    # Create resized preview for display (to avoid window being too large)
+                    preview_height = 600
+                    preview_width = int(vis_frame.shape[1] * preview_height / vis_frame.shape[0])
+                    preview_frame = cv2.resize(vis_frame, (preview_width, preview_height))
+                    
+                    cv2.imshow(window_name, preview_frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    
+                    if key == ord('q'):
+                        logger.info("🛑 User requested quit via 'q' key")
+                        break
+                    elif key == ord('s'):
+                        logger.info("⏭️ Skipping preview display")
+                        self.show_preview = False
+                        cv2.destroyWindow(window_name)
+                
                 self.total_frames_processed += 1
                 pbar.update(1)
                 
+                # Periodic memory cleanup and monitoring  
                 if frame_count % 100 == 0:
                     logger.debug(f"Frame {frame_count}: {len(active_tracks)} active tracks")
+                    
+                    # Memory monitoring and cleanup
+                    memory_info = psutil.virtual_memory()
+                    stored_tracks = len(self.track_middle_frames)
+                    
+                    logger.debug(f"Memory: {memory_info.percent:.1f}% used, "
+                               f"stored tracks: {stored_tracks}/{self.max_stored_tracks}")
+                    
+                    # Force cleanup every 100 frames to prevent memory buildup
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    # Emergency cleanup if memory usage is high
+                    if memory_info.percent > 85:
+                        logger.warning(f"High memory usage: {memory_info.percent:.1f}% "
+                                     f"({memory_info.used / (1024**3):.1f}GB used)")
+                        
+                        # Additional emergency cleanup
+                        if memory_info.percent > 90 and stored_tracks > 20:
+                            logger.warning("Emergency memory cleanup: reducing stored tracks")
+                            self.max_stored_tracks = min(20, self.max_stored_tracks)
+                            self._cleanup_oldest_stored_frames()
+                            gc.collect()
+                
+                # Explicit cleanup of large variables each frame
+                del anomaly_map
+                if 'motion_estimate' in locals():
+                    del motion_estimate
         
         finally:
             cap.release()
             out.release()
             pbar.close()
+            
+            # Cleanup preview window
+            if self.show_preview:
+                cv2.destroyAllWindows()
         
         processing_time = time.time() - self.processing_start_time
         
@@ -547,6 +697,7 @@ def main():
     parser.add_argument('--image_size', type=int, default=384, help='Model input image size')
     parser.add_argument('--no_save_defect_frames', action='store_true', help='Disable saving individual defect frames')
     parser.add_argument('--no_organized_output', action='store_true', help='Disable organized output structure')
+    parser.add_argument('--no_preview', action='store_true', help='Disable real-time preview window')
     
     args = parser.parse_args()
     
@@ -558,7 +709,8 @@ def main():
         pixel_size=args.pixel_size,
         fabric_speed_estimate=args.fabric_speed,
         save_defect_frames=not args.no_save_defect_frames,
-        use_organized_output=not args.no_organized_output
+        use_organized_output=not args.no_organized_output,
+        show_preview=not args.no_preview
     )
     
     results = inference_system.process_video(
