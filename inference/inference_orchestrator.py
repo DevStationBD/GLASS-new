@@ -175,6 +175,64 @@ class GLASSInferenceOrchestrator:
             
         return anomaly_score
     
+    def _sample_camera_frames(self, camera_id: int, camera_fps: int = 30) -> List[np.ndarray]:
+        """Sample frames from camera for model evaluation"""
+        logger.info(f"📹 Sampling {self.sample_frames} frames from camera {camera_id} for model selection")
+        
+        cap = cv2.VideoCapture(camera_id)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open camera {camera_id}. Please check camera connection.")
+        
+        # Set camera properties
+        cap.set(cv2.CAP_PROP_FPS, camera_fps)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Set reasonable resolution
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
+        frames = []
+        warmup_frames = 10  # Skip first few frames to let camera adjust
+        frame_interval = max(1, camera_fps // 2)  # Sample every 0.5 seconds
+        
+        try:
+            # Warmup camera
+            for _ in range(warmup_frames):
+                ret, _ = cap.read()
+                if not ret:
+                    raise ValueError("Camera stream ended during warmup")
+            
+            logger.info("🔄 Camera warmed up, collecting sample frames...")
+            frame_count = 0
+            collected_frames = 0
+            
+            while collected_frames < self.sample_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    logger.warning("Camera stream ended unexpectedly")
+                    break
+                
+                # Sample frame at intervals
+                if frame_count % frame_interval == 0:
+                    frames.append(frame.copy())
+                    collected_frames += 1
+                    
+                    if collected_frames % 5 == 0:
+                        logger.info(f"  Collected {collected_frames}/{self.sample_frames} frames")
+                
+                frame_count += 1
+                
+                # Safety timeout (max 30 seconds of sampling)
+                if frame_count > camera_fps * 30:
+                    logger.warning("Camera sampling timeout reached")
+                    break
+                    
+        finally:
+            cap.release()
+        
+        if len(frames) < 5:
+            raise ValueError(f"Could not collect enough frames from camera (got {len(frames)}, need at least 5)")
+            
+        logger.info(f"✅ Collected {len(frames)} frames from camera for model selection")
+        return frames
+    
     def _sample_video_frames(self, video_path: str) -> List[np.ndarray]:
         """Sample frames from video for model evaluation"""
         cap = cv2.VideoCapture(video_path)
@@ -260,6 +318,58 @@ class GLASSInferenceOrchestrator:
         logger.info(f"  Model {model_candidate.class_name}: avg_score={avg_score:.4f} (±{std_score:.4f})")
         return result
     
+    def select_best_model_from_camera(self, camera_id: int, camera_fps: int = 30) -> Tuple[ModelCandidate, Dict]:
+        """Select the best model for camera input"""
+        logger.info(f"🎯 Starting model selection for camera {camera_id}")
+        
+        # Sample frames from camera
+        frames = self._sample_camera_frames(camera_id, camera_fps)
+        if not frames:
+            raise ValueError("No frames could be extracted from camera")
+        
+        # Evaluate each model
+        evaluation_results = []
+        best_model = None
+        best_score = float('inf')
+        
+        for model_candidate in self.available_models:
+            try:
+                result = self._evaluate_model_on_frames(frames, model_candidate)
+                if result is None:
+                    continue
+                    
+                evaluation_results.append(result)
+                
+                # Track best model (lowest anomaly score = best fit)
+                if result['avg_anomaly_score'] < best_score:
+                    best_score = result['avg_anomaly_score']
+                    best_model = model_candidate
+                    
+            except Exception as e:
+                logger.warning(f"Failed to evaluate model {model_candidate.class_name}: {e}")
+                continue
+        
+        if best_model is None:
+            raise RuntimeError("No models could be successfully evaluated")
+        
+        # Generate selection report
+        selection_report = {
+            'timestamp': datetime.now().isoformat(),
+            'input_source': f'camera_{camera_id}',
+            'camera_fps': camera_fps,
+            'selected_model': {
+                'class_name': best_model.class_name,
+                'avg_anomaly_score': best_model.avg_anomaly_score,
+                'model_dir': best_model.model_dir
+            },
+            'all_evaluations': evaluation_results,
+            'selection_criteria': 'lowest_average_anomaly_score',
+            'frames_sampled': len(frames)
+        }
+        
+        logger.info(f"✅ Selected best model: {best_model.class_name} (score: {best_score:.4f})")
+        return best_model, selection_report
+
     def select_best_model(self, video_path: str) -> Tuple[ModelCandidate, Dict]:
         """Select the best model for the given video"""
         logger.info(f"Starting model selection for video: {video_path}")
@@ -362,6 +472,92 @@ class GLASSInferenceOrchestrator:
         
         return orchestrator_results
     
+    def run_inference_with_camera(self, camera_id: int, camera_fps: int = 30, 
+                                 duration_seconds: Optional[int] = None, 
+                                 skip_model_selection: bool = False,
+                                 output_path: str = None) -> Dict:
+        """Run complete inference workflow with camera input"""
+        logger.info(f"🚀 Starting GLASS Camera Inference Orchestrator")
+        logger.info(f"📹 Camera: {camera_id}, FPS: {camera_fps}, Duration: {duration_seconds or 'continuous'}")
+        
+        # Step 1: Model selection (or skip)
+        if skip_model_selection:
+            if not self.available_models:
+                raise RuntimeError("No models available")
+            best_model = self.available_models[0]
+            logger.info(f"⚡ Skipping model selection, using: {best_model.class_name}")
+            
+            selection_report = {
+                'timestamp': datetime.now().isoformat(),
+                'input_source': f'camera_{camera_id}',
+                'camera_fps': camera_fps,
+                'selected_model': {
+                    'class_name': best_model.class_name,
+                    'model_dir': best_model.model_dir
+                },
+                'selection_criteria': 'first_available_model',
+                'frames_sampled': 0
+            }
+        else:
+            # Select best model from camera
+            best_model, selection_report = self.select_best_model_from_camera(camera_id, camera_fps)
+        
+        # Step 2: Run full inference with selected model
+        logger.info(f"🎯 Running camera inference with model: {best_model.class_name}")
+        
+        # Import video inference with tracking
+        from video_inference_with_tracking import VideoInferenceWithTracking
+        
+        # Create camera input path
+        camera_input = f"camera:{camera_id}:{camera_fps}"
+        if duration_seconds:
+            camera_input += f":{duration_seconds}"
+        
+        # Create inference system with selected model
+        inference_system = VideoInferenceWithTracking(
+            model_path=best_model.model_path,
+            class_name=best_model.class_name,
+            device=str(self.device),
+            image_size=self.image_size,
+            save_defect_frames=True,
+            use_organized_output=True
+        )
+        
+        # Run camera inference
+        inference_results = inference_system.process_camera(
+            camera_id=camera_id,
+            camera_fps=camera_fps,
+            duration_seconds=duration_seconds,
+            output_path=output_path
+        )
+        
+        # Combine results
+        orchestrator_results = {
+            'orchestrator_info': {
+                'timestamp': datetime.now().isoformat(),
+                'input_source': f'camera_{camera_id}',
+                'camera_fps': camera_fps,
+                'duration_seconds': duration_seconds,
+                'models_evaluated': len(self.available_models) if not skip_model_selection else 1,
+                'selected_model': best_model.class_name,
+                'selection_score': getattr(best_model, 'avg_anomaly_score', None)
+            },
+            'model_selection': selection_report,
+            'inference_results': inference_results
+        }
+        
+        # Save orchestrator report
+        if hasattr(inference_system, 'output_base_dir') and inference_system.output_base_dir:
+            report_dir = os.path.join(inference_system.output_base_dir, "report")
+            orchestrator_report_path = os.path.join(report_dir, "orchestrator_camera_report.json")
+            
+            with open(orchestrator_report_path, 'w') as f:
+                json.dump(orchestrator_results, f, indent=2)
+            
+            logger.info(f"Camera orchestrator report saved: {orchestrator_report_path}")
+        
+        return orchestrator_results
+    
     def list_available_models(self) -> None:
         """List all available models"""
         print(f"\n📋 Available Models ({len(self.available_models)}):")
@@ -386,7 +582,11 @@ class GLASSInferenceOrchestrator:
 
 def main():
     parser = argparse.ArgumentParser(description='GLASS Inference Orchestrator - Automatic Model Selection')
-    parser.add_argument('--video_path', type=str, help='Path to input video (required unless --list_models)')
+    parser.add_argument('--video_path', type=str, help='Path to input video (required unless --camera or --list_models)')
+    parser.add_argument('--camera', action='store_true', help='Use camera input instead of video file')
+    parser.add_argument('--camera_id', type=int, default=0, help='Camera device ID (default: 0)')
+    parser.add_argument('--camera_fps', type=int, default=30, help='Camera FPS for recording (default: 30)')
+    parser.add_argument('--duration_seconds', type=int, help='Duration to record from camera (default: continuous)')
     parser.add_argument('--output_path', type=str, help='Output video path (optional with organized output)')
     parser.add_argument('--models_path', type=str, default='results/models/backbone_0', 
                        help='Path to models directory')
@@ -394,6 +594,8 @@ def main():
     parser.add_argument('--image_size', type=int, default=384, help='Model input image size')
     parser.add_argument('--sample_frames', type=int, default=30, 
                        help='Number of frames to sample for model evaluation')
+    parser.add_argument('--skip_model_selection', action='store_true', 
+                       help='Skip automatic model selection and use first available model')
     parser.add_argument('--list_models', action='store_true', 
                        help='List available models and exit')
     
@@ -412,33 +614,87 @@ def main():
         orchestrator.list_available_models()
         return
     
-    # Validate video path (only if not listing models)
-    if not args.video_path:
-        if not args.list_models:
-            logger.error("Video path is required unless using --list_models")
-            return
-    elif not os.path.exists(args.video_path):
+    # Validate input source
+    if args.camera and args.video_path:
+        logger.error("Cannot specify both --camera and --video_path. Choose one input source.")
+        return
+    
+    if not args.camera and not args.video_path:
+        logger.error("Must specify either --camera or --video_path as input source.")
+        return
+    
+    # Validate video file if specified
+    if args.video_path and not os.path.exists(args.video_path):
         logger.error(f"Video file not found: {args.video_path}")
         return
     
+    # Test camera connection if specified
+    if args.camera:
+        logger.info(f"🔍 Testing camera connection (ID: {args.camera_id})...")
+        cap = cv2.VideoCapture(args.camera_id)
+        if not cap.isOpened():
+            logger.error(f"❌ Could not open camera {args.camera_id}. Please check camera connection.")
+            return
+        else:
+            # Test frame capture
+            ret, frame = cap.read()
+            if not ret:
+                logger.error(f"❌ Camera {args.camera_id} connected but cannot capture frames.")
+                cap.release()
+                return
+            
+            logger.info(f"✅ Camera {args.camera_id} connected successfully ({frame.shape[1]}x{frame.shape[0]})")
+            cap.release()
+    
     try:
-        # Run orchestrated inference
-        results = orchestrator.run_inference_with_best_model(
-            video_path=args.video_path,
-            output_path=args.output_path
-        )
-        
-        # Print summary
-        print("\n" + "="*60)
-        print("🎯 GLASS INFERENCE ORCHESTRATOR RESULTS")
-        print("="*60)
-        print(f"📹 Video: {os.path.basename(args.video_path)}")
-        print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
-        print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
-        print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
-        print(f"🎭 Unique Defects Found: {results['inference_results']['unique_defects']}")
-        print(f"⚡ Processing FPS: {results['inference_results']['fps_processing']:.1f}")
-        print("="*60)
+        if args.camera:
+            # Run camera inference
+            logger.info("🎥 Starting camera-based inference...")
+            results = orchestrator.run_inference_with_camera(
+                camera_id=args.camera_id,
+                camera_fps=args.camera_fps,
+                duration_seconds=args.duration_seconds,
+                skip_model_selection=args.skip_model_selection,
+                output_path=args.output_path
+            )
+            
+            # Print camera summary
+            print("\n" + "="*60)
+            print("🎯 GLASS CAMERA INFERENCE RESULTS")
+            print("="*60)
+            print(f"📹 Camera: {args.camera_id} @ {args.camera_fps}fps")
+            if args.duration_seconds:
+                print(f"⏱️  Duration: {args.duration_seconds}s")
+            else:
+                print(f"⏱️  Duration: Continuous (until stopped)")
+            print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
+            if results['orchestrator_info']['selection_score']:
+                print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
+            print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
+            if 'unique_defects' in results['inference_results']:
+                print(f"🎭 Unique Defects Found: {results['inference_results']['unique_defects']}")
+            if 'fps_processing' in results['inference_results']:
+                print(f"⚡ Processing FPS: {results['inference_results']['fps_processing']:.1f}")
+            print("="*60)
+            
+        else:
+            # Run video inference
+            results = orchestrator.run_inference_with_best_model(
+                video_path=args.video_path,
+                output_path=args.output_path
+            )
+            
+            # Print video summary
+            print("\n" + "="*60)
+            print("🎯 GLASS VIDEO INFERENCE RESULTS")
+            print("="*60)
+            print(f"📹 Video: {os.path.basename(args.video_path)}")
+            print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
+            print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
+            print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
+            print(f"🎭 Unique Defects Found: {results['inference_results']['unique_defects']}")
+            print(f"⚡ Processing FPS: {results['inference_results']['fps_processing']:.1f}")
+            print("="*60)
         
     except Exception as e:
         logger.error(f"Orchestrator failed: {e}")

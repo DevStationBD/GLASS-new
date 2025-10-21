@@ -20,6 +20,7 @@ import time
 import logging
 import gc
 import psutil
+from typing import Optional
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -615,6 +616,189 @@ class VideoInferenceWithTracking:
         
         logger.info(f"Processing complete! Processed {self.total_frames_processed} frames in {processing_time:.2f}s")
         logger.info(f"Found {results['unique_defects']} unique defects")
+        
+        return results
+    
+    def process_camera(self, camera_id: int, camera_fps: int = 30, 
+                      duration_seconds: Optional[int] = None,
+                      output_path: str = None, **kwargs):
+        """Process camera feed with defect tracking"""
+        self.processing_start_time = time.time()
+        
+        # Setup organized output structure  
+        if output_path is None:
+            output_path = f"camera_{camera_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        organized_output_path, organized_defect_dir = self._setup_organized_output(output_path)
+        
+        # Initialize camera
+        cap = cv2.VideoCapture(camera_id)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open camera {camera_id}. Please check camera connection.")
+        
+        # Set camera properties
+        cap.set(cv2.CAP_PROP_FPS, camera_fps)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
+        # Get actual camera properties
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Calculate total frames if duration is specified
+        total_frames = duration_seconds * fps if duration_seconds else None
+        
+        logger.info(f"📹 Processing camera {camera_id}: {width}x{height}, {fps} FPS")
+        if duration_seconds:
+            logger.info(f"⏱️  Recording for {duration_seconds} seconds ({total_frames} frames)")
+        else:
+            logger.info(f"⏱️  Recording continuously (press 'q' to stop)")
+        
+        # Setup video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(organized_output_path, fourcc, fps, (width * 2, height))
+        
+        # Initialize progress bar
+        if total_frames:
+            pbar = tqdm(total=total_frames, desc="Processing camera frames")
+        else:
+            pbar = tqdm(desc="Processing camera frames (continuous)")
+        
+        # Setup preview window if enabled
+        if self.show_preview:
+            window_name = f"GLASS Camera Inference - {self.class_name}"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, min(1920, width * 2), min(1080, height))
+            logger.info(f"📺 Live preview enabled: Press 'q' to quit, 's' to skip preview")
+        
+        frame_count = 0
+        active_tracks_history = []
+        
+        try:
+            # Warmup camera (skip first few frames)
+            warmup_frames = 5
+            for _ in range(warmup_frames):
+                ret, _ = cap.read()
+                if not ret:
+                    raise ValueError("Camera stream ended during warmup")
+            
+            logger.info("🔄 Camera warmed up, starting inference...")
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    logger.warning("Camera stream ended unexpectedly")
+                    break
+                
+                # Check duration limit
+                if duration_seconds and frame_count >= total_frames:
+                    logger.info(f"✅ Reached duration limit ({duration_seconds}s)")
+                    break
+                
+                # Run inference
+                anomaly_map, anomaly_score = self.predict_frame(frame)
+                
+                # Motion estimation
+                motion_estimate = self.motion_estimator.estimate_motion(frame)
+                fabric_motion = motion_estimate.displacement
+                
+                # Update defect tracker
+                active_tracks = self.defect_tracker.process_frame(frame, anomaly_map, fabric_motion)
+                active_tracks_history.append(len(active_tracks))
+                
+                # Save defect frames if needed
+                self._save_defect_frames(frame, active_tracks, frame_count, anomaly_map)
+                
+                # Create visualization
+                vis_frame = self._create_visualization(frame, anomaly_map, active_tracks, motion_estimate, frame_count)
+                out.write(vis_frame)
+                
+                # Display real-time preview
+                if self.show_preview:
+                    # Create resized preview for display
+                    preview_height = 600
+                    preview_width = int(vis_frame.shape[1] * preview_height / vis_frame.shape[0])
+                    preview_frame = cv2.resize(vis_frame, (preview_width, preview_height))
+                    
+                    cv2.imshow(window_name, preview_frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    
+                    if key == ord('q'):
+                        logger.info("🛑 User requested quit via 'q' key")
+                        break
+                    elif key == ord('s'):
+                        logger.info("⏭️ Skipping preview display")
+                        self.show_preview = False
+                        cv2.destroyWindow(window_name)
+                
+                self.total_frames_processed += 1
+                frame_count += 1
+                pbar.update(1)
+                
+                # Periodic memory cleanup and monitoring
+                if frame_count % 100 == 0:
+                    logger.debug(f"Frame {frame_count}: {len(active_tracks)} active tracks")
+                    
+                    # Memory monitoring and cleanup
+                    memory_info = psutil.virtual_memory()
+                    stored_tracks = len(getattr(self, 'track_middle_frames', {}))
+                    
+                    logger.debug(f"Memory: {memory_info.percent:.1f}% used, "
+                               f"stored tracks: {stored_tracks}")
+                    
+                    # Force cleanup every 100 frames
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    # Emergency cleanup if memory usage is high
+                    if memory_info.percent > 85:
+                        logger.warning(f"High memory usage: {memory_info.percent:.1f}%")
+                        
+                        # Additional emergency cleanup for camera streams
+                        if memory_info.percent > 90 and hasattr(self, 'track_middle_frames'):
+                            if len(self.track_middle_frames) > 20:
+                                logger.warning("Emergency memory cleanup: reducing stored tracks")
+                                self.max_stored_tracks = min(20, getattr(self, 'max_stored_tracks', 50))
+                                self._cleanup_oldest_stored_frames()
+                                gc.collect()
+                
+                # Clear variables to help garbage collection
+                del anomaly_map
+                if 'motion_estimate' in locals():
+                    del motion_estimate
+                    
+        except KeyboardInterrupt:
+            logger.info("🛑 Camera processing interrupted by user")
+        
+        finally:
+            cap.release()
+            out.release()
+            pbar.close()
+            
+            # Cleanup preview window
+            if self.show_preview:
+                cv2.destroyAllWindows()
+        
+        processing_time = time.time() - self.processing_start_time
+        
+        # Save middle frames for all completed tracks
+        self._save_middle_frames_for_completed_tracks()
+        
+        # Generate camera-specific report
+        camera_input_name = f"camera_{camera_id}"
+        results = self._generate_report(camera_input_name, organized_output_path, processing_time, active_tracks_history)
+        
+        # Add camera-specific information
+        results.update({
+            'camera_id': camera_id,
+            'camera_fps': camera_fps,
+            'duration_seconds': duration_seconds,
+            'frames_captured': frame_count
+        })
+        
+        logger.info(f"📹 Camera processing complete! Captured {frame_count} frames in {processing_time:.2f}s")
+        logger.info(f"🎭 Found {results['unique_defects']} unique defects")
         
         return results
     
