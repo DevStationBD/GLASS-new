@@ -104,7 +104,19 @@ class GLASSInferenceOrchestrator:
                 logger.debug(f"Found model: {class_dir}")
                 
         return sorted(models, key=lambda x: x.class_name)
-    
+
+    def get_model_by_class_name(self, class_name: str) -> Optional[ModelCandidate]:
+        """Manually get a specific model by class name"""
+        for model in self.available_models:
+            if model.class_name == class_name:
+                logger.info(f"✅ Manually selected model: {class_name}")
+                return model
+
+        # Model not found, show available models
+        available_classes = [m.class_name for m in self.available_models]
+        logger.error(f"❌ Model '{class_name}' not found. Available models: {', '.join(available_classes)}")
+        return None
+
     def _load_glass_model(self, model_candidate: ModelCandidate):
         """Load GLASS model for a specific candidate"""
         if model_candidate.is_loaded:
@@ -423,12 +435,30 @@ class GLASSInferenceOrchestrator:
         logger.info(f"✅ Selected best model: {best_model.class_name} (score: {best_score:.4f})")
         return best_model, selection_report
     
-    def run_inference_with_best_model(self, video_path: str, output_path: str = None) -> Dict:
-        """Run complete inference workflow with automatic model selection"""
+    def run_inference_with_best_model(self, video_path: str, output_path: str = None, manual_class_name: str = None) -> Dict:
+        """Run complete inference workflow with automatic or manual model selection"""
         logger.info("🚀 Starting GLASS Inference Orchestrator")
-        
-        # Step 1: Select best model
-        best_model, selection_report = self.select_best_model(video_path)
+
+        # Step 1: Select model (manual or automatic)
+        if manual_class_name:
+            logger.info(f"🎯 Using manually specified model: {manual_class_name}")
+            best_model = self.get_model_by_class_name(manual_class_name)
+            if best_model is None:
+                raise ValueError(f"Model '{manual_class_name}' not found")
+
+            selection_report = {
+                'timestamp': datetime.now().isoformat(),
+                'video_file': os.path.basename(video_path),
+                'selected_model': {
+                    'class_name': best_model.class_name,
+                    'model_dir': best_model.model_dir
+                },
+                'selection_criteria': 'manual_selection',
+                'frames_sampled': 0
+            }
+        else:
+            # Automatic selection
+            best_model, selection_report = self.select_best_model(video_path)
         
         # Step 2: Run full inference with selected model
         logger.info(f"Running full inference with model: {best_model.class_name}")
@@ -454,9 +484,10 @@ class GLASSInferenceOrchestrator:
             'orchestrator_info': {
                 'timestamp': datetime.now().isoformat(),
                 'video_file': os.path.basename(video_path),
-                'models_evaluated': len(self.available_models),
+                'models_evaluated': len(self.available_models) if not manual_class_name else 1,
                 'selected_model': best_model.class_name,
-                'selection_score': best_model.avg_anomaly_score
+                'selection_score': best_model.avg_anomaly_score,
+                'selection_mode': 'manual' if manual_class_name else 'automatic'
             },
             'model_selection': selection_report,
             'inference_results': inference_results
@@ -474,16 +505,35 @@ class GLASSInferenceOrchestrator:
         
         return orchestrator_results
     
-    def run_inference_with_camera(self, camera_id: int, camera_fps: int = 30, 
-                                 duration_seconds: Optional[int] = None, 
+    def run_inference_with_camera(self, camera_id: int, camera_fps: int = 30,
+                                 duration_seconds: Optional[int] = None,
                                  skip_model_selection: bool = False,
+                                 manual_class_name: str = None,
                                  output_path: str = None) -> Dict:
         """Run complete inference workflow with camera input"""
         logger.info(f"🚀 Starting GLASS Camera Inference Orchestrator")
         logger.info(f"📹 Camera: {camera_id}, FPS: {camera_fps}, Duration: {duration_seconds or 'continuous'}")
-        
-        # Step 1: Model selection (or skip)
-        if skip_model_selection:
+
+        # Step 1: Model selection (manual, skip, or automatic)
+        if manual_class_name:
+            # Manual model selection
+            logger.info(f"🎯 Using manually specified model: {manual_class_name}")
+            best_model = self.get_model_by_class_name(manual_class_name)
+            if best_model is None:
+                raise ValueError(f"Model '{manual_class_name}' not found")
+
+            selection_report = {
+                'timestamp': datetime.now().isoformat(),
+                'input_source': f'camera_{camera_id}',
+                'camera_fps': camera_fps,
+                'selected_model': {
+                    'class_name': best_model.class_name,
+                    'model_dir': best_model.model_dir
+                },
+                'selection_criteria': 'manual_selection',
+                'frames_sampled': 0
+            }
+        elif skip_model_selection:
             if not self.available_models:
                 raise RuntimeError("No models available")
             best_model = self.available_models[0]
@@ -534,15 +584,17 @@ class GLASSInferenceOrchestrator:
         )
         
         # Combine results
+        selection_mode = 'manual' if manual_class_name else ('skip' if skip_model_selection else 'automatic')
         orchestrator_results = {
             'orchestrator_info': {
                 'timestamp': datetime.now().isoformat(),
                 'input_source': f'camera_{camera_id}',
                 'camera_fps': camera_fps,
                 'duration_seconds': duration_seconds,
-                'models_evaluated': len(self.available_models) if not skip_model_selection else 1,
+                'models_evaluated': len(self.available_models) if not (skip_model_selection or manual_class_name) else 1,
                 'selected_model': best_model.class_name,
-                'selection_score': getattr(best_model, 'avg_anomaly_score', None)
+                'selection_score': getattr(best_model, 'avg_anomaly_score', None),
+                'selection_mode': selection_mode
             },
             'model_selection': selection_report,
             'inference_results': inference_results
@@ -590,15 +642,17 @@ def main():
     parser.add_argument('--camera_fps', type=int, default=30, help='Camera FPS for recording (default: 30)')
     parser.add_argument('--duration_seconds', type=int, help='Duration to record from camera (default: continuous)')
     parser.add_argument('--output_path', type=str, help='Output video path (optional with organized output)')
-    parser.add_argument('--models_path', type=str, default='results/models/backbone_0', 
+    parser.add_argument('--models_path', type=str, default='results/models/backbone_0',
                        help='Path to models directory')
+    parser.add_argument('--class_name', type=str,
+                       help='Manually specify model class name (bypasses automatic selection)')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device to use')
     parser.add_argument('--image_size', type=int, default=384, help='Model input image size')
-    parser.add_argument('--sample_frames', type=int, default=30, 
+    parser.add_argument('--sample_frames', type=int, default=30,
                        help='Number of frames to sample for model evaluation')
-    parser.add_argument('--skip_model_selection', action='store_true', 
+    parser.add_argument('--skip_model_selection', action='store_true',
                        help='Skip automatic model selection and use first available model')
-    parser.add_argument('--list_models', action='store_true', 
+    parser.add_argument('--list_models', action='store_true',
                        help='List available models and exit')
     
     args = parser.parse_args()
@@ -657,6 +711,7 @@ def main():
                 camera_fps=args.camera_fps,
                 duration_seconds=args.duration_seconds,
                 skip_model_selection=args.skip_model_selection,
+                manual_class_name=args.class_name,
                 output_path=args.output_path
             )
             
@@ -670,6 +725,7 @@ def main():
             else:
                 print(f"⏱️  Duration: Continuous (until stopped)")
             print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
+            print(f"🎲 Selection Mode: {results['orchestrator_info']['selection_mode']}")
             if results['orchestrator_info']['selection_score']:
                 print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
             print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
@@ -683,7 +739,8 @@ def main():
             # Run video inference
             results = orchestrator.run_inference_with_best_model(
                 video_path=args.video_path,
-                output_path=args.output_path
+                output_path=args.output_path,
+                manual_class_name=args.class_name
             )
             
             # Print video summary
@@ -692,7 +749,9 @@ def main():
             print("="*60)
             print(f"📹 Video: {os.path.basename(args.video_path)}")
             print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
-            print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
+            print(f"🎲 Selection Mode: {results['orchestrator_info']['selection_mode']}")
+            if results['orchestrator_info']['selection_score']:
+                print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
             print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
             print(f"🎭 Unique Defects Found: {results['inference_results']['unique_defects']}")
             print(f"⚡ Processing FPS: {results['inference_results']['fps_processing']:.1f}")
