@@ -227,8 +227,7 @@ class DatasetOrchestrator:
         ground_truth_dir = self.dataset_dir / "ground_truth"
         
         args = [
-            "--validate", str(ground_truth_dir),
-            "--plot_stats"
+            "--validate", str(ground_truth_dir)
         ]
         
         success = self.run_script("mask_utils.py", args)
