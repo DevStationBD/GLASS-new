@@ -166,8 +166,10 @@ class GLASSInferenceOrchestrator:
     def _predict_frame(self, frame: np.ndarray, model_candidate: ModelCandidate) -> float:
         """Run inference on a single frame with a specific model"""
         glass_model = self._load_glass_model(model_candidate)
-        
-        input_tensor = self.transform(frame).unsqueeze(0).to(self.device)
+
+        # Convert BGR to RGB (OpenCV uses BGR, model expects RGB)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
             image_scores, masks = glass_model._predict(input_tensor)

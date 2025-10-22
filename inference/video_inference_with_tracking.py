@@ -163,7 +163,9 @@ class VideoInferenceWithTracking:
     
     def predict_frame(self, frame: np.ndarray):
         """Run GLASS inference on single frame"""
-        input_tensor = self.transform(frame).unsqueeze(0).to(self.device)
+        # Convert BGR to RGB (OpenCV uses BGR, model expects RGB)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
             # Use the GLASS model's _predict method which handles the full pipeline
