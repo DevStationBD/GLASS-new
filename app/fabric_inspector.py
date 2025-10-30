@@ -11,20 +11,42 @@ import time
 import threading
 import sys
 import os
+import logging
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 import config
 
+# Setup logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('fabric_inspector.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Add GLASS inference path
 GLASS_INFERENCE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'inference')
 GLASS_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results', 'models', 'backbone_0')
 
+logger.info(f"Fabric Inspector starting...")
+logger.debug(f"Current file: {os.path.abspath(__file__)}")
+logger.debug(f"GLASS_INFERENCE_PATH: {GLASS_INFERENCE_PATH}")
+logger.debug(f"GLASS_MODEL_PATH: {GLASS_MODEL_PATH}")
+logger.debug(f"GLASS_INFERENCE_PATH exists: {os.path.exists(GLASS_INFERENCE_PATH)}")
+logger.debug(f"GLASS_MODEL_PATH exists: {os.path.exists(GLASS_MODEL_PATH)}")
+
 if os.path.exists(GLASS_INFERENCE_PATH):
     sys.path.insert(0, GLASS_INFERENCE_PATH)
     GLASS_AVAILABLE = True
+    logger.info("GLASS inference found and loaded")
 else:
     GLASS_AVAILABLE = False
+    logger.warning("GLASS inference not found. Using simulation mode.")
     print("Warning: GLASS inference not found. Using simulation mode.")
 
 
@@ -234,80 +256,97 @@ class FabricInspector:
             print(f"  Warning: Unknown serial command '{command}'")
     
     def run_main_loop(self):
-        """Main event loop"""
-        while True:
-            if self.mode == "menu":
-                frame = self.draw_menu()
-            elif self.mode == "train":
-                frame = self.draw_training()
-            elif self.mode == "test":
-                frame = self.draw_testing()
-            elif self.mode == "review":
-                frame = self.draw_review()
-            elif self.mode == "model_select":
-                frame = self.draw_model_selection()
-            else:
-                frame = self.draw_menu()
-            
-            cv2.imshow(self.window_name, frame)
-            
-            key = cv2.waitKey(30) & 0xFF
-            
-            # Handle keyboard input
-            if key != 255:
-                key_char = chr(key).lower()
-                
+        """Main application loop"""
+        try:
+            while True:
+                # Get current frame based on mode
                 if self.mode == "menu":
-                    if key_char == self.keys.get('menu', 'quit'):
-                        break
-                    elif key_char == self.keys.get('menu', 'training_mode'):
-                        self.mode = "train"
-                        self.start_training_mode()
-                    elif key_char == self.keys.get('menu', 'inference_mode'):
-                        self.mode = "test"
-                        self.start_testing_mode()
-                
-                elif self.mode == "train":
-                    if key_char == self.keys.get('training', 'capture'):
-                        self.capture_image()
-                    elif key_char == self.keys.get('training', 'submit'):
-                        if self.capture_count >= config.MIN_IMAGES_FOR_TRAINING:
-                            self.submit_training()
-                    elif key_char == self.keys.get('training', 'back_to_menu'):
-                        self.mode = "menu"
-                        self.cleanup_mode()
-                
-                elif self.mode == "test":
-                    if key_char == self.keys.get('inference', 'reselect_model'):
-                        self.selected_model = self.auto_detect_model()
-                    elif key_char == self.keys.get('inference', 'back_to_menu'):
-                        self.mode = "menu"
-                        self.cleanup_mode()
-                
+                    frame = self.draw_menu()
+                elif self.mode == "training":
+                    frame = self.draw_training()
+                elif self.mode == "testing":
+                    frame = self.draw_testing()
+                elif self.mode == "model_selection":
+                    frame = self.draw_model_selection()
                 elif self.mode == "review":
-                    if key_char == self.keys.get('review', 'next'):
-                        self.review_next_image()
-                    elif key_char == self.keys.get('review', 'previous'):
-                        self.review_previous_image()
-                    elif key_char == self.keys.get('review', 'discard'):
-                        self.review_discard_current()
-                    elif key_char == self.keys.get('review', 'confirm'):
-                        self.review_confirm_submit()
-                    elif key_char == self.keys.get('review', 'back'):
-                        self.mode = "train"
-                        self.images_to_discard.clear()
+                    frame = self.draw_review()
+                else:
+                    frame = self.draw_menu()
                 
-                elif self.mode == "model_select":
-                    if key_char == self.keys.get('review', 'next') or key_char == 'n':
-                        self.model_selection_next()
-                    elif key_char == self.keys.get('review', 'previous') or key_char == 'p':
-                        self.model_selection_previous()
-                    elif key_char == self.keys.get('review', 'confirm') or key_char == 's':
-                        self.confirm_model_selection()
-                    elif key_char == self.keys.get('review', 'back') or key_char == 'b':
-                        self.mode = "menu"
+                # Display frame
+                cv2.imshow(self.window_name, frame)
+                
+                # Handle keyboard input
+                key = cv2.waitKey(30) & 0xFF
+                
+                if not self.handle_keyboard_input(key):
+                    break
+        except KeyboardInterrupt:
+            print("\n🛑 Application interrupted by user")
+        finally:
+            self.cleanup()
+    
+    def handle_keyboard_input(self, key):
+        """Handle keyboard input based on current mode"""
+        if key == ord('q') or key == 27:  # 'q' or ESC key
+            return False  # Exit main loop
         
-        self.cleanup()
+        key_char = chr(key) if key < 256 else None
+        
+        if self.mode == "menu":
+            if key_char == 't' or key_char == 'T':
+                self.mode = "training"
+                self.start_training_mode()
+            elif key_char == 'i' or key_char == 'I':
+                self.mode = "model_selection"
+                self.load_available_models()
+            elif key_char == 'q' or key_char == 'Q':
+                return False
+        
+        elif self.mode == "training":
+            if key_char == 'c' or key_char == 'C':
+                self.capture_image()
+            elif key_char == 's' or key_char == 'S':
+                if self.capture_count >= config.MIN_IMAGES_FOR_TRAINING:
+                    self.submit_training()
+            elif key_char == 'r' or key_char == 'R':
+                self.mode = "review"
+            elif key_char == 'm' or key_char == 'M':
+                self.mode = "menu"
+                self.cleanup_mode()
+        
+        elif self.mode == "testing":
+            if key_char == 'r' or key_char == 'R':
+                if hasattr(self, 'selected_model_class'):
+                    self.load_available_models()
+            elif key_char == 'm' or key_char == 'M':
+                self.mode = "menu"
+                self.cleanup_mode()
+        
+        elif self.mode == "model_selection":
+            if key_char == 'n' or key_char == 'N':
+                self.model_selection_next()
+            elif key_char == 'p' or key_char == 'P':
+                self.model_selection_previous()
+            elif key_char == 's' or key_char == 'S':
+                self.confirm_model_selection()
+            elif key_char == 'b' or key_char == 'B':
+                self.mode = "menu"
+        
+        elif self.mode == "review":
+            if key_char == 'n' or key_char == 'N':
+                self.review_next_image()
+            elif key_char == 'p' or key_char == 'P':
+                self.review_previous_image()
+            elif key_char == 'd' or key_char == 'D':
+                self.review_discard_current()
+            elif key_char == 'c' or key_char == 'C':
+                self.review_confirm_submit()
+            elif key_char == 'b' or key_char == 'B':
+                self.mode = "training"
+                self.images_to_discard.clear()
+        
+        return True  # Continue main loop
     
     def draw_menu(self):
         """Draw main menu"""
@@ -325,13 +364,23 @@ class FabricInspector:
         inference_key = self.keys.get('menu', 'inference_mode').upper()
         quit_key = self.keys.get('menu', 'quit').upper()
         
+        # Get actual model count from GLASS model path
+        models_dir = Path(GLASS_MODEL_PATH)
+        model_count = 0
+        if models_dir.exists():
+            model_dirs = [p for p in models_dir.iterdir() if p.is_dir() and not p.name.startswith('.')]
+            model_count = len(model_dirs)
+            logger.debug(f"Menu: Found {model_count} models in {models_dir}: {[p.name for p in model_dirs]}")
+        else:
+            logger.warning(f"Menu: Models directory does not exist: {models_dir}")
+        
         options = [
             f"Press '{training_key}' - Training Mode (Capture & Train)",
             f"Press '{inference_key}' - Inference Mode (Test Models)",
             f"Press '{quit_key}' - Quit Application",
             "",
             f"Datasets: {len(list(Path(config.DATASETS_DIR).glob('batch_*')))} available",
-            f"Models: {len(list(Path(config.INFERENCE_DIR).glob('batch_*')))} available",
+            f"Models: {model_count} available",
         ]
         
         for text in options:
@@ -350,15 +399,110 @@ class FabricInspector:
         
         return frame
     
+    def configure_v4l2_settings(self, camera_index=None):
+        """Configure camera using v4l2-ctl for high quality image capture"""
+        try:
+            if camera_index is None:
+                camera_index = config.CAMERA_INDEX
+            
+            device = f"/dev/video{camera_index}"
+            logger.info(f"🔧 Configuring camera via v4l2-ctl on {device}")
+            
+            # High-quality v4l2 settings optimized for fabric inspection
+            v4l2_settings = {
+                'auto_exposure': 1,              # Manual exposure mode
+                'exposure_time_absolute': 5,     # Balanced shutter for sharp images
+                'gain': 255,                     # Maximum gain for fast shutter
+                'brightness': 200,               # High brightness compensation
+                'contrast': 200,                 # Maximum contrast for detail
+                'sharpness': 255,               # Maximum sharpness for fabric detail
+                'saturation': 100,              # Standard saturation
+                'focus_automatic_continuous': 0, # Manual focus for consistency
+                'focus_absolute': 50,            # Medium focus distance
+                'white_balance_automatic': 0,    # Manual white balance
+                'white_balance_temperature': 4000, # Neutral white balance
+                'power_line_frequency': 1,       # 60Hz (avoid flicker)
+                'backlight_compensation': 0      # Disable backlight compensation
+            }
+            
+            # Apply each setting
+            for setting, value in v4l2_settings.items():
+                try:
+                    cmd = ['v4l2-ctl', '-d', device, '--set-ctrl', f'{setting}={value}']
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                    
+                    if result.returncode == 0:
+                        logger.debug(f"  ✅ {setting}: {value}")
+                    else:
+                        logger.warning(f"  ⚠️  {setting}: {value} - {result.stderr.strip()}")
+                        
+                except subprocess.TimeoutExpired:
+                    logger.error(f"  ❌ {setting}: timeout")
+                except FileNotFoundError:
+                    logger.error("v4l2-ctl not found - install with: sudo apt install v4l-utils")
+                    return False
+                except Exception as e:
+                    logger.error(f"  ❌ {setting}: {e}")
+            
+            logger.info("✅ V4L2 camera configuration completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"V4L2 configuration failed: {e}")
+            return False
+    
+    def initialize_high_quality_camera(self, camera_index=None):
+        """Initialize camera with high-quality settings for fabric inspection"""
+        try:
+            if camera_index is None:
+                camera_index = config.CAMERA_INDEX
+            
+            # Configure camera using v4l2-ctl first for precise control
+            if not self.configure_v4l2_settings(camera_index):
+                logger.warning("V4L2 configuration failed, using OpenCV settings only")
+            
+            # Use V4L2 backend for best performance
+            camera = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
+            
+            if not camera.isOpened():
+                logger.error(f"Failed to open camera {camera_index}")
+                return None
+            
+            # Optimizations for high-quality capture
+            camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer for low latency
+            
+            # Set high resolution and format
+            camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+            camera.set(cv2.CAP_PROP_FPS, 60)  # Higher FPS for sharper motion capture
+            
+            # Verify actual settings
+            actual_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_fps = camera.get(cv2.CAP_PROP_FPS)
+            
+            logger.info("✅ High-quality camera initialized:")
+            logger.info(f"  Resolution: {actual_width}x{actual_height}")
+            logger.info(f"  FPS: {actual_fps}")
+            logger.info(f"  Using v4l2-ctl settings for optimal image quality")
+            
+            return camera
+            
+        except Exception as e:
+            logger.error(f"Camera initialization error: {e}")
+            return None
+    
     def start_training_mode(self):
-        """Initialize training mode"""
-        self.camera = cv2.VideoCapture(config.CAMERA_INDEX)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-        self.camera.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
+        """Initialize training mode with high-quality camera settings"""
+        logger.info("🎯 Starting training mode with high-quality camera settings...")
         
-        if not self.camera.isOpened():
-            print("Error: Could not open camera")
+        # Use high-quality camera initialization
+        self.camera = self.initialize_high_quality_camera()
+        
+        if self.camera is None:
+            print("Error: Could not open camera with high-quality settings")
+            logger.error("Failed to initialize high-quality camera for training")
             self.mode = "menu"
             return
         
@@ -443,9 +587,20 @@ class FabricInspector:
         dataset_dir = Path(config.DATASETS_DIR) / f"batch_{self.batch_id}"
         dataset_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save image
+        # Save image with high quality settings
         img_path = dataset_dir / f"img_{self.capture_count + 1:04d}.{config.IMAGE_FORMAT}"
-        cv2.imwrite(str(img_path), self.current_frame)
+        
+        # High-quality JPEG settings (95% quality, same as capture_fhd_old.py)
+        jpeg_quality = 95
+        success = cv2.imwrite(str(img_path), self.current_frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+        
+        if success:
+            # Get file size for logging
+            file_size = os.path.getsize(img_path) / (1024 * 1024)  # MB
+            logger.info(f"💾 High-quality image saved: {img_path.name} ({file_size:.1f} MB, {jpeg_quality}% quality)")
+        else:
+            logger.error(f"❌ Failed to save image: {img_path}")
+            return
         
         self.capture_count += 1
         self.captured_images.append(str(img_path))
@@ -781,33 +936,51 @@ class FabricInspector:
     
     def load_available_models(self):
         """Load list of available models and their preview images"""
+        logger.info("Loading available models...")
+        
         # Models are inside the backbone_0 directory
         models_dir = Path(GLASS_MODEL_PATH)
         eval_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / 'results' / 'eval'
+        
+        logger.debug(f"GLASS_MODEL_PATH: {GLASS_MODEL_PATH}")
+        logger.debug(f"Models directory: {models_dir}")
+        logger.debug(f"Models directory exists: {models_dir.exists()}")
+        logger.debug(f"Eval directory: {eval_dir}")
+        logger.debug(f"Eval directory exists: {eval_dir.exists()}")
         
         self.available_models = []
         self.model_previews = {}
         
         # Find all model directories inside backbone_0
         if models_dir.exists():
+            logger.debug(f"Scanning models directory: {models_dir}")
             for model_path in models_dir.iterdir():
+                logger.debug(f"Found item: {model_path.name} (is_dir: {model_path.is_dir()}, starts_with_dot: {model_path.name.startswith('.')})")
                 if model_path.is_dir() and not model_path.name.startswith('.'):
                     model_name = model_path.name
+                    logger.info(f"Found model: {model_name}")
                     self.available_models.append(model_name)
                     
                     # Look for corresponding preview image in eval folder
                     eval_model_dir = eval_dir / model_name
                     preview_image = None
                     
+                    logger.debug(f"Looking for preview in: {eval_model_dir}")
                     if eval_model_dir.exists():
                         # Find first image file in the eval directory
                         for img_file in eval_model_dir.iterdir():
                             if img_file.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp']:
                                 preview_image = str(img_file)
+                                logger.debug(f"Found preview image: {preview_image}")
                                 break
+                    else:
+                        logger.debug(f"No eval directory found for model: {model_name}")
                     
                     self.model_previews[model_name] = preview_image
+        else:
+            logger.warning(f"Models directory does not exist: {models_dir}")
         
+        logger.info(f"Found {len(self.available_models)} models: {self.available_models}")
         print(f"Found models: {self.available_models}")
     
     def draw_model_selection(self):
@@ -913,15 +1086,20 @@ class FabricInspector:
             self.run_glass_inference()
             # After GLASS inference completes, return to menu
             self.mode = "menu"
+            
+            # Ensure main window is properly displayed
+            cv2.destroyAllWindows()  # Clean up any leftover windows
+            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.window_name, self.screen_width, self.screen_height)
             return
         
-        # Fallback to simple OpenCV mode
-        self.camera = cv2.VideoCapture(config.CAMERA_INDEX)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+        # Fallback to OpenCV mode with high-quality settings
+        logger.info("🎯 Starting testing mode with high-quality camera settings...")
+        self.camera = self.initialize_high_quality_camera()
         
-        if not self.camera.isOpened():
-            print("Error: Could not open camera")
+        if self.camera is None:
+            print("Error: Could not open camera with high-quality settings")
+            logger.error("Failed to initialize high-quality camera for testing")
             self.mode = "menu"
             return
         
@@ -943,10 +1121,14 @@ class FabricInspector:
                 print("Error: No model class selected")
                 return
             
-            # Initialize GLASS inference orchestrator
+            # Initialize GLASS inference orchestrator with proper GPU detection
+            import torch
+            device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+            logger.info(f"🎯 Initializing GLASS inference with device: {device}")
+            
             orchestrator = GLASSInferenceOrchestrator(
                 models_base_path=GLASS_MODEL_PATH,
-                device='cuda:0' if cv2.cuda.getCudaEnabledDeviceCount() > 0 else 'cpu',
+                device=device,
                 image_size=384,
                 sample_frames=30
             )
@@ -975,7 +1157,8 @@ class FabricInspector:
                 print(f"Processing FPS: {results['inference_results']['fps_processing']:.1f}")
             print("="*60 + "\n")
             
-            # Generate PDF report
+            # Generate PDF report immediately
+            print("📄 Generating report...")
             self.generate_pdf_report(results)
             
         except ImportError as e:
@@ -991,38 +1174,93 @@ class FabricInspector:
         try:
             from pdf_report_generator import GLASSReportGenerator
             
-            # Find the tracking report JSON file
-            inference_results = results.get('inference_results', {})
+            # Find the tracking report JSON file in the output directory structure
+            # Expected path: output/mvtec_mvt2/20251025_192359/report/mvtec_mvt2_tracking_report.json
             
-            # Look for tracking report in the output directory
-            # The orchestrator should have created organized output
-            if 'output_path' in inference_results:
-                output_dir = Path(inference_results['output_path']).parent
-                report_dir = output_dir / 'report'
+            # Look in the main output directory for the latest session
+            output_base = Path("output")
+            if not output_base.exists():
+                print("⚠️  Output directory not found")
+                return
+            
+            # Find the model class directory (e.g., mvtec_mvt2)
+            model_class = self.selected_model_class if hasattr(self, 'selected_model_class') else None
+            if not model_class:
+                print("⚠️  No model class selected")
+                return
+            
+            model_output_dir = output_base / model_class
+            if not model_output_dir.exists():
+                print(f"⚠️  Model output directory not found: {model_output_dir}")
+                return
+            
+            # Find the most recent session directory (sorted by name, which includes timestamp)
+            session_dirs = [d for d in model_output_dir.iterdir() if d.is_dir()]
+            if not session_dirs:
+                print(f"⚠️  No session directories found in: {model_output_dir}")
+                return
+            
+            # Get the most recent session (latest timestamp)
+            latest_session = sorted(session_dirs, key=lambda x: x.name)[-1]
+            report_dir = latest_session / 'report'
+            
+            if not report_dir.exists():
+                print(f"⚠️  Report directory not found: {report_dir}")
+                return
+            
+            # Look for tracking report JSON
+            tracking_report_files = list(report_dir.glob('*_tracking_report.json'))
+            
+            if tracking_report_files:
+                json_path = str(tracking_report_files[0])
+                print(f"📄 Found tracking report: {json_path}")
+                print(f"📄 Generating PDF report...")
                 
-                # Look for tracking report JSON
-                tracking_report_files = list(report_dir.glob('*_tracking_report.json'))
+                # Generate PDF report
+                generator = GLASSReportGenerator()
+                pdf_path = generator.generate_report(json_path, open_after=False)
                 
-                if tracking_report_files:
-                    json_path = str(tracking_report_files[0])
-                    print(f"📄 Generating PDF report from: {json_path}")
-                    
-                    # Generate PDF report
-                    generator = GLASSReportGenerator()
-                    pdf_path = generator.generate_report(json_path, open_after=True)
-                    
-                    print(f"✅ PDF report saved to Documents folder: {pdf_path}")
-                    
-                else:
-                    print("⚠️  No tracking report JSON found for PDF generation")
+                print(f"✅ PDF report generated and saved to Documents folder!")
+                print(f"📁 PDF location: {pdf_path}")
+                
+                # Store PDF path for orchestrator (don't try to open from OpenCV context)
+                print(f"ORCHESTRATOR_PDF_PATH:{pdf_path}")  # Special marker for orchestrator
+                
             else:
-                print("⚠️  No output path found in inference results")
+                print(f"⚠️  No tracking report JSON found in: {report_dir}")
+                # List available files for debugging
+                available_files = list(report_dir.glob('*.json'))
+                if available_files:
+                    print(f"Available JSON files: {[f.name for f in available_files]}")
                 
         except ImportError as e:
             print(f"⚠️  Could not generate PDF report: {e}")
-            print("Install reportlab with: pip install reportlab")
+            print("💡 Install reportlab with: pip install reportlab")
         except Exception as e:
             print(f"⚠️  Error generating PDF report: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def open_pdf_file(self, pdf_path):
+        """Simple PDF opening with error reporting"""
+        import subprocess
+        
+        # Try xdg-open exactly like the working manual script
+        try:
+            result = subprocess.run(['xdg-open', pdf_path], 
+                                  stdout=subprocess.DEVNULL, 
+                                  stderr=subprocess.DEVNULL,
+                                  timeout=5)
+            if result.returncode == 0:
+                print(f"📖 PDF opened successfully")
+                return
+            else:
+                print(f"❌ xdg-open failed with return code: {result}")
+        except Exception as e:
+            print(f"❌ xdg-open error: {e}")
+        
+        # If xdg-open failed, just show the path
+        print(f"💡 Manually open with: xdg-open '{pdf_path}'")
     
     def run_inference(self, frame):
         """Run inference on frame (simulation)"""
@@ -1048,8 +1286,9 @@ class FabricInspector:
         self.current_frame = None
     
     def cleanup(self):
-        """Cleanup and exit"""
-        self.cleanup_mode()
+        """Clean up resources"""
+        if self.camera and self.camera.isOpened():
+            self.camera.release()
         
         if self.serial_listener:
             self.serial_listener.stop()

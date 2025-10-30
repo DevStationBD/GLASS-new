@@ -337,19 +337,89 @@ class GLASSReportGenerator:
             return os.path.join(os.path.expanduser("~"), "Documents")
     
     def open_pdf(self, pdf_path: str):
-        """Open PDF file with default system viewer"""
-        system = platform.system()
+        """Open PDF file in web browser (safe method to avoid Qt conflicts)"""
+        import webbrowser
+        import threading
+        import time
         
-        try:
-            if system == "Windows":
-                os.startfile(pdf_path)
-            elif system == "Darwin":  # macOS
-                subprocess.run(["open", pdf_path])
-            else:  # Linux and others
-                subprocess.run(["xdg-open", pdf_path])
-        except Exception as e:
-            print(f"Could not open PDF automatically: {e}")
-            print(f"PDF saved at: {pdf_path}")
+        def safe_browser_open():
+            """Open browser in separate thread to avoid GUI conflicts"""
+            try:
+                time.sleep(0.5)  # Small delay to avoid conflicts
+                file_url = f"file://{os.path.abspath(pdf_path)}"
+                
+                # Use subprocess to avoid Qt threading issues
+                import subprocess
+                import sys
+                
+                if platform.system() == "Linux":
+                    # Try multiple methods on Linux with proper checking
+                    opened = False
+                    
+                    # Try xdg-open first
+                    try:
+                        result = subprocess.run(['xdg-open', pdf_path], 
+                                              stdout=subprocess.DEVNULL, 
+                                              stderr=subprocess.DEVNULL,
+                                              timeout=3)
+                        if result.returncode == 0:
+                            print(f"📖 PDF opened with xdg-open")
+                            opened = True
+                        else:
+                            print(f"❌ xdg-open failed with return code: {result.returncode}")
+                    except Exception as e:
+                        print(f"❌ xdg-open error: {e}")
+                        pass
+                    
+                    if not opened:
+                        # Try firefox
+                        try:
+                            result = subprocess.run(['firefox', pdf_path], 
+                                                  stdout=subprocess.DEVNULL, 
+                                                  stderr=subprocess.DEVNULL,
+                                                  timeout=3)
+                            if result.returncode == 0:
+                                print(f"📖 PDF opened with Firefox")
+                                opened = True
+                            else:
+                                print(f"❌ firefox failed with return code: {result.returncode}")
+                        except Exception as e:
+                            print(f"❌ firefox error: {e}")
+                            pass
+                    
+                    if not opened:
+                        # Try chrome/chromium
+                        try:
+                            result = subprocess.run(['google-chrome', pdf_path], 
+                                                  stdout=subprocess.DEVNULL, 
+                                                  stderr=subprocess.DEVNULL,
+                                                  timeout=3)
+                            if result.returncode == 0:
+                                print(f"📖 PDF opened with Chrome")
+                                opened = True
+                            else:
+                                print(f"❌ google-chrome failed with return code: {result.returncode}")
+                        except Exception as e:
+                            print(f"❌ google-chrome error: {e}")
+                            pass
+                    
+                    if not opened:
+                        print(f"❌ Could not auto-open PDF")
+                        print(f"📁 PDF saved at: {pdf_path}")
+                        print(f"💡 Manually open with: xdg-open '{pdf_path}'")
+                else:
+                    # Use webbrowser for other systems
+                    webbrowser.open_new_tab(file_url)
+                    print(f"📖 PDF opened in web browser")
+                    
+            except Exception as e:
+                print(f"Could not open PDF automatically: {e}")
+                print(f"📁 PDF saved at: {pdf_path}")
+                print(f"💡 Please manually open the file to view the report")
+        
+        # Run in separate thread to avoid blocking
+        browser_thread = threading.Thread(target=safe_browser_open, daemon=True)
+        browser_thread.start()
     
     def generate_report(self, json_path: str, output_path: str = None, open_after: bool = True) -> str:
         """Generate PDF report from JSON tracking data"""
@@ -399,17 +469,13 @@ class GLASSReportGenerator:
         
         print(f"✅ PDF report generated: {output_path}")
         
-        # Open PDF if requested
-        if open_after:
-            self.open_pdf(output_path)
-        
         return output_path
 
 
 def main():
     """Test the report generator"""
     import argparse
-    
+        
     parser = argparse.ArgumentParser(description='Generate PDF report from GLASS tracking JSON')
     parser.add_argument('json_path', help='Path to JSON tracking report')
     parser.add_argument('--output', '-o', help='Output PDF path (optional)')

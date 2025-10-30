@@ -53,6 +53,39 @@ class ModelCandidate:
 class GLASSInferenceOrchestrator:
     """Orchestrator that automatically selects the best model for a video"""
     
+    def _log_gpu_info(self):
+        """Log comprehensive GPU information"""
+        logger.info("=" * 60)
+        logger.info("🔍 GPU DETECTION AND SETUP")
+        logger.info("=" * 60)
+        
+        # Check CUDA availability
+        cuda_available = torch.cuda.is_available()
+        logger.info(f"CUDA Available: {cuda_available}")
+        
+        if cuda_available:
+            gpu_count = torch.cuda.device_count()
+            logger.info(f"GPU Count: {gpu_count}")
+            
+            # Log all available GPUs
+            for i in range(gpu_count):
+                gpu_name = torch.cuda.get_device_name(i)
+                gpu_props = torch.cuda.get_device_properties(i)
+                gpu_memory = gpu_props.total_memory / (1024**3)
+                logger.info(f"  GPU {i}: {gpu_name} ({gpu_memory:.1f} GB)")
+        else:
+            logger.warning("No CUDA GPUs detected")
+            
+        # Log PyTorch versions
+        logger.info(f"PyTorch Version: {torch.__version__}")
+        if cuda_available:
+            logger.info(f"CUDA Version: {torch.version.cuda}")
+            logger.info(f"cuDNN Available: {torch.backends.cudnn.is_available()}")
+            if torch.backends.cudnn.is_available():
+                logger.info(f"cuDNN Version: {torch.backends.cudnn.version()}")
+        
+        logger.info("=" * 60)
+    
     def __init__(self, 
                  models_base_path: str = "results/models/backbone_0",
                  device: str = 'cuda:0',
@@ -60,7 +93,21 @@ class GLASSInferenceOrchestrator:
                  sample_frames: int = 30):
         """Initialize the orchestrator"""
         self.models_base_path = models_base_path
+        
+        # GPU Detection and Device Setup
+        self._log_gpu_info()
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        logger.info(f"🔧 Using device: {self.device}")
+        
+        if self.device.type == 'cuda':
+            gpu_name = torch.cuda.get_device_name(self.device)
+            gpu_memory = torch.cuda.get_device_properties(self.device).total_memory / (1024**3)
+            logger.info(f"🚀 GPU: {gpu_name} ({gpu_memory:.1f} GB)")
+            logger.info(f"🔥 CUDA Version: {torch.version.cuda}")
+            logger.info(f"⚡ cuDNN Version: {torch.backends.cudnn.version()}")
+        else:
+            logger.warning("⚠️  Running on CPU - GPU not available or not detected")
+        
         self.image_size = image_size
         self.sample_frames = sample_frames
         
@@ -173,6 +220,12 @@ class GLASSInferenceOrchestrator:
         model_candidate.glass_model = glass_model
         model_candidate.is_loaded = True
         
+        # Log GPU memory usage after model loading
+        if self.device.type == 'cuda':
+            memory_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
+            memory_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
+            logger.info(f"🧠 GPU Memory - Allocated: {memory_allocated:.2f} GB, Reserved: {memory_reserved:.2f} GB")
+        
         return glass_model
     
     def _predict_frame(self, frame: np.ndarray, model_candidate: ModelCandidate) -> float:
@@ -183,9 +236,21 @@ class GLASSInferenceOrchestrator:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
         
+        # Log GPU tensor transfer
+        if self.device.type == 'cuda':
+            logger.debug(f"⚡ Tensor moved to GPU: {input_tensor.shape} -> {self.device}")
+        
         with torch.no_grad():
+            start_time = time.time()
             image_scores, masks = glass_model._predict(input_tensor)
+            inference_time = time.time() - start_time
             anomaly_score = float(image_scores[0])
+            
+            # Log inference performance
+            if self.device.type == 'cuda':
+                logger.debug(f"🚀 GPU Inference: {inference_time*1000:.1f}ms, Score: {anomaly_score:.4f}")
+            else:
+                logger.debug(f"🐌 CPU Inference: {inference_time*1000:.1f}ms, Score: {anomaly_score:.4f}")
             
         return anomaly_score
     
