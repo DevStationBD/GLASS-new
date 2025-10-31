@@ -19,6 +19,8 @@ import time
 import logging
 from typing import List, Dict, Tuple, Optional
 import glob
+import serial
+import threading
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,6 +32,12 @@ from torchvision import transforms
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# Serial Communication Configuration
+SERIAL_PORT = '/dev/ttyUSB0'  # Change to your serial port (e.g., 'COM3' on Windows)
+SERIAL_BAUD_RATE = 9600        # Baud rate for serial communication
+SERIAL_DEFECT_COMMAND = 'stc\n'  # Command to send when defect is detected
+SERIAL_TIMEOUT = 1.0           # Serial timeout in seconds
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -49,6 +57,97 @@ class ModelCandidate:
         
     def __str__(self):
         return f"ModelCandidate(class={self.class_name}, avg_score={self.avg_anomaly_score:.4f if self.avg_anomaly_score else 'N/A'})"
+
+class SerialDefectNotifier:
+    """Handles serial communication for defect notifications"""
+    
+    def __init__(self, port: str = SERIAL_PORT, baud_rate: int = SERIAL_BAUD_RATE, 
+                 command: str = SERIAL_DEFECT_COMMAND, timeout: float = SERIAL_TIMEOUT):
+        self.port = port
+        self.baud_rate = baud_rate
+        self.command = command
+        self.timeout = timeout
+        self.serial_connection = None
+        self.is_connected = False
+        self.sent_defect_ids = set()  # Track which defects we've already notified about
+        self.lock = threading.Lock()  # Thread safety for serial operations
+        
+    def connect(self):
+        """Establish serial connection"""
+        try:
+            self.serial_connection = serial.Serial(
+                port=self.port,
+                baudrate=self.baud_rate,
+                timeout=self.timeout,
+                write_timeout=self.timeout
+            )
+            self.is_connected = True
+            logger.info(f"📡 Serial connection established: {self.port} @ {self.baud_rate} baud")
+            return True
+        except serial.SerialException as e:
+            logger.warning(f"⚠️ Failed to connect to serial port {self.port}: {e}")
+            self.is_connected = False
+            return False
+        except Exception as e:
+            logger.error(f"❌ Unexpected error connecting to serial port: {e}")
+            self.is_connected = False
+            return False
+    
+    def disconnect(self):
+        """Close serial connection"""
+        if self.serial_connection and self.is_connected:
+            try:
+                self.serial_connection.close()
+                self.is_connected = False
+                logger.info("📡 Serial connection closed")
+            except Exception as e:
+                logger.warning(f"⚠️ Error closing serial connection: {e}")
+    
+    def send_defect_notification(self, defect_id: str, defect_type: str = "unknown"):
+        """Send defect notification over serial port"""
+        if not self.is_connected or not self.serial_connection:
+            logger.debug(f"Serial not connected, skipping notification for defect {defect_id}")
+            return False
+        
+        # Check if we've already sent notification for this defect
+        with self.lock:
+            if defect_id in self.sent_defect_ids:
+                return True  # Already sent, no need to send again
+            
+            try:
+                # Create enhanced command with defect info
+                enhanced_command = f"DEFECT_DETECTED,ID:{defect_id},TYPE:{defect_type}\n"
+                
+                # Send the command
+                self.serial_connection.write(enhanced_command.encode('utf-8'))
+                self.serial_connection.flush()  # Ensure data is sent immediately
+                
+                # Mark this defect as notified
+                self.sent_defect_ids.add(defect_id)
+                
+                logger.info(f"📡 Serial notification sent: {enhanced_command.strip()}")
+                return True
+                
+            except serial.SerialTimeoutError:
+                logger.warning(f"⚠️ Serial timeout sending notification for defect {defect_id}")
+                return False
+            except serial.SerialException as e:
+                logger.warning(f"⚠️ Serial error sending notification for defect {defect_id}: {e}")
+                # Try to reconnect
+                self.disconnect()
+                if self.connect():
+                    logger.info("📡 Serial reconnection successful, retrying notification")
+                    return self.send_defect_notification(defect_id, defect_type)
+                return False
+            except Exception as e:
+                logger.error(f"❌ Unexpected error sending serial notification: {e}")
+                return False
+    
+    def reset_sent_notifications(self):
+        """Reset the list of sent notifications (useful for new sessions)"""
+        with self.lock:
+            self.sent_defect_ids.clear()
+            logger.debug("📡 Serial notification history reset")
 
 class GLASSInferenceOrchestrator:
     """Orchestrator that automatically selects the best model for a video"""
@@ -90,7 +189,10 @@ class GLASSInferenceOrchestrator:
                  models_base_path: str = "results/models/backbone_0",
                  device: str = 'cuda:0',
                  image_size: int = 384,
-                 sample_frames: int = 30):
+                 sample_frames: int = 30,
+                 enable_serial: bool = True,
+                 serial_port: str = SERIAL_PORT,
+                 serial_baud_rate: int = SERIAL_BAUD_RATE):
         """Initialize the orchestrator"""
         self.models_base_path = models_base_path
         
@@ -122,6 +224,29 @@ class GLASSInferenceOrchestrator:
         # Discover available models
         self.available_models = self._discover_models()
         logger.info(f"Found {len(self.available_models)} available models")
+        
+        # Initialize serial communication for defect notifications
+        self.enable_serial = enable_serial
+        self.serial_notifier = None
+        if self.enable_serial:
+            self.serial_notifier = SerialDefectNotifier(
+                port=serial_port,
+                baud_rate=serial_baud_rate
+            )
+            # Try to connect to serial port
+            if self.serial_notifier.connect():
+                logger.info(f"📡 Serial defect notifications enabled: {serial_port} @ {serial_baud_rate} baud")
+            else:
+                logger.warning(f"⚠️ Serial port connection failed, notifications disabled")
+                self.enable_serial = False
+        else:
+            logger.info("📡 Serial defect notifications disabled")
+    
+    def cleanup(self):
+        """Cleanup resources including serial connection"""
+        if self.enable_serial and self.serial_notifier:
+            self.serial_notifier.disconnect()
+            logger.info("📡 Serial connection cleanup completed")
         
     def _discover_models(self) -> List[ModelCandidate]:
         """Discover all available trained models"""
@@ -538,7 +663,8 @@ class GLASSInferenceOrchestrator:
             device=str(self.device),
             image_size=self.image_size,
             save_defect_frames=True,
-            use_organized_output=True
+            use_organized_output=True,
+            serial_notifier=self.serial_notifier if self.enable_serial else None
         )
         
         # Run inference
@@ -637,7 +763,8 @@ class GLASSInferenceOrchestrator:
             device=str(self.device),
             image_size=self.image_size,
             save_defect_frames=True,
-            use_organized_output=True
+            use_organized_output=True,
+            serial_notifier=self.serial_notifier if self.enable_serial else None
         )
         
         # Run camera inference
@@ -720,6 +847,14 @@ def main():
     parser.add_argument('--list_models', action='store_true',
                        help='List available models and exit')
     
+    # Serial communication arguments
+    parser.add_argument('--disable_serial', action='store_true',
+                       help='Disable serial defect notifications')
+    parser.add_argument('--serial_port', type=str, default=SERIAL_PORT,
+                       help=f'Serial port for defect notifications (default: {SERIAL_PORT})')
+    parser.add_argument('--serial_baud_rate', type=int, default=SERIAL_BAUD_RATE,
+                       help=f'Serial baud rate (default: {SERIAL_BAUD_RATE})')
+    
     args = parser.parse_args()
     
     # Initialize orchestrator
@@ -727,7 +862,10 @@ def main():
         models_base_path=args.models_path,
         device=args.device,
         image_size=args.image_size,
-        sample_frames=args.sample_frames
+        sample_frames=args.sample_frames,
+        enable_serial=not args.disable_serial,
+        serial_port=args.serial_port,
+        serial_baud_rate=args.serial_baud_rate
     )
     
     # List models if requested
@@ -825,6 +963,9 @@ def main():
     except Exception as e:
         logger.error(f"Orchestrator failed: {e}")
         raise
+    finally:
+        # Cleanup resources
+        orchestrator.cleanup()
 
 
 if __name__ == '__main__':
