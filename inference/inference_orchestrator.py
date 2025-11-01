@@ -35,8 +35,8 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 # Serial Communication Configuration
 SERIAL_PORT = '/dev/ttyUSB0'  # Change to your serial port (e.g., 'COM3' on Windows)
-SERIAL_BAUD_RATE = 9600        # Baud rate for serial communication
-SERIAL_DEFECT_COMMAND = 'stc\n'  # Command to send when defect is detected
+SERIAL_BAUD_RATE = 115200      # Baud rate for serial communication
+SERIAL_DEFECT_COMMAND = 'stc'  # Command to send when defect is detected
 SERIAL_TIMEOUT = 1.0           # Serial timeout in seconds
 
 # Setup logging
@@ -62,10 +62,9 @@ class SerialDefectNotifier:
     """Handles serial communication for defect notifications"""
     
     def __init__(self, port: str = SERIAL_PORT, baud_rate: int = SERIAL_BAUD_RATE, 
-                 command: str = SERIAL_DEFECT_COMMAND, timeout: float = SERIAL_TIMEOUT):
+                 timeout: float = SERIAL_TIMEOUT):
         self.port = port
         self.baud_rate = baud_rate
-        self.command = command
         self.timeout = timeout
         self.serial_connection = None
         self.is_connected = False
@@ -114,18 +113,15 @@ class SerialDefectNotifier:
             if defect_id in self.sent_defect_ids:
                 return True  # Already sent, no need to send again
             
-            try:
-                # Create enhanced command with defect info
-                enhanced_command = f"DEFECT_DETECTED,ID:{defect_id},TYPE:{defect_type}\n"
-                
+            try:                
                 # Send the command
-                self.serial_connection.write(enhanced_command.encode('utf-8'))
+                self.serial_connection.write(SERIAL_DEFECT_COMMAND.encode('utf-8'))
                 self.serial_connection.flush()  # Ensure data is sent immediately
                 
                 # Mark this defect as notified
                 self.sent_defect_ids.add(defect_id)
                 
-                logger.info(f"📡 Serial notification sent: {enhanced_command.strip()}")
+                logger.info(f"📡 Serial notification sent: {SERIAL_DEFECT_COMMAND.strip()}")
                 return True
                 
             except serial.SerialTimeoutError:
