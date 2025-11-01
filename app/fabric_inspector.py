@@ -1107,12 +1107,12 @@ class FabricInspector:
         self.mode = "test"
     
     def run_glass_inference(self):
-        """Run GLASS real-time inference with camera using orchestrator"""
+        """Run GLASS inference with video file using orchestrator"""
         try:
             # Import GLASS inference orchestrator
             sys.path.insert(0, GLASS_INFERENCE_PATH)
             from inference_orchestrator import GLASSInferenceOrchestrator
-            
+
             # Get the selected model class name
             if hasattr(self, 'selected_model_class') and self.selected_model_class:
                 class_name = self.selected_model_class
@@ -1120,34 +1120,41 @@ class FabricInspector:
             else:
                 print("Error: No model class selected")
                 return
-            
+
+            # Video path for inference
+            video_path = "test-video/custom/grid/grid_combined.mp4"
+
+            # Check if video exists
+            if not os.path.exists(video_path):
+                print(f"❌ Error: Video file not found: {video_path}")
+                print("Please ensure the video file exists before running inference.")
+                return
+
             # Initialize GLASS inference orchestrator with proper GPU detection
             import torch
             device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
             logger.info(f"🎯 Initializing GLASS inference with device: {device}")
-            
+
             orchestrator = GLASSInferenceOrchestrator(
                 models_base_path=GLASS_MODEL_PATH,
                 device=device,
                 image_size=384,
                 sample_frames=30
             )
-            
+
             print("\n" + "="*60)
-            print("GLASS Real-time Inference Active")
-            print("Press 'q' in the preview window to stop")
+            print("GLASS Video Inference Active")
+            print(f"Video: {video_path}")
+            print(f"Model: {class_name}")
             print("="*60 + "\n")
-            
-            # Run camera inference with selected model class
-            results = orchestrator.run_inference_with_camera(
-                camera_id=config.CAMERA_INDEX,
-                camera_fps=config.CAMERA_FPS,
-                duration_seconds=None,  # Continuous until stopped
-                skip_model_selection=False,
-                manual_class_name=class_name,
-                output_path=None
+
+            # Run video inference with selected model class
+            results = orchestrator.run_inference_with_best_model(
+                video_path=video_path,
+                output_path=None,  # Will use organized output
+                manual_class_name=class_name
             )
-            
+
             print("\n" + "="*60)
             print("GLASS Inference Complete")
             print(f"Selected Model: {results['orchestrator_info']['selected_model']}")
@@ -1156,11 +1163,11 @@ class FabricInspector:
             if 'fps_processing' in results['inference_results']:
                 print(f"Processing FPS: {results['inference_results']['fps_processing']:.1f}")
             print("="*60 + "\n")
-            
+
             # Generate PDF report immediately
             print("📄 Generating report...")
             self.generate_pdf_report(results)
-            
+
         except ImportError as e:
             print(f"Error importing GLASS orchestrator: {e}")
             print("Make sure GLASS dependencies are installed")
