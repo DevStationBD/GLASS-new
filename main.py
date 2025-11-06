@@ -273,8 +273,6 @@ def run(
     device = utils.set_torch_device(gpu)
 
     result_collect = []
-    data = {'Class': [], 'Distribution': [], 'Foreground': []}
-    df = pd.DataFrame(data)
     for dataloader_count, dataloaders in enumerate(list_of_dataloaders):
         utils.fix_seeds(seed, device)
         dataset_name = dataloaders["training"].name
@@ -293,57 +291,50 @@ def run(
         models_dir = os.path.join(run_save_path, "models")
         os.makedirs(models_dir, exist_ok=True)
         for i, GLASS in enumerate(glass_list):
-            flag = 0., 0., 0., 0., 0., -1.
             if GLASS.backbone.seed is not None:
                 utils.fix_seeds(GLASS.backbone.seed, device)
 
             GLASS.set_model_dir(os.path.join(models_dir, f"backbone_{i}"), dataset_name)
             if test == 'ckpt':
+                # Train the model (distribution analysis happens automatically inside trainer)
                 flag = GLASS.trainer(dataloaders["training"], dataloaders["testing"], dataset_name)
-                if type(flag) == int:
-                    row_dist = {'Class': dataloaders["training"].name, 'Distribution': flag, 'Foreground': flag}
-                    df = pd.concat([df, pd.DataFrame(row_dist, index=[0])])
+            else:
+                flag = 0., 0., 0., 0., 0., -1.
 
-            if type(flag) != int:
-                i_auroc, i_ap, p_auroc, p_ap, p_pro, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
-                result_collect.append(
-                    {
-                        "dataset_name": dataset_name,
-                        "image_auroc": i_auroc,
-                        "image_ap": i_ap,
-                        "pixel_auroc": p_auroc,
-                        "pixel_ap": p_ap,
-                        "pixel_pro": p_pro,
-                        "best_epoch": epoch,
-                    }
-                )
+            # Test the model and collect results
+            i_auroc, i_ap, p_auroc, p_ap, p_pro, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
+            result_collect.append(
+                {
+                    "dataset_name": dataset_name,
+                    "image_auroc": i_auroc,
+                    "image_ap": i_ap,
+                    "pixel_auroc": p_auroc,
+                    "pixel_ap": p_ap,
+                    "pixel_pro": p_pro,
+                    "best_epoch": epoch,
+                }
+            )
 
-                if epoch > -1:
-                    for key, item in result_collect[-1].items():
-                        if isinstance(item, str):
-                            continue
-                        elif isinstance(item, int):
-                            print(f"{key}:{item}")
-                        else:
-                            print(f"{key}:{round(item * 100, 2)} ", end="")
+            if epoch > -1:
+                for key, item in result_collect[-1].items():
+                    if isinstance(item, str):
+                        continue
+                    elif isinstance(item, int):
+                        print(f"{key}:{item}")
+                    else:
+                        print(f"{key}:{round(item * 100, 2)} ", end="")
 
-                # save results csv after each category
-                print("\n")
-                result_metric_names = list(result_collect[-1].keys())[1:]
-                result_dataset_names = [results["dataset_name"] for results in result_collect]
-                result_scores = [list(results.values())[1:] for results in result_collect]
-                utils.compute_and_store_final_results(
-                    run_save_path,
-                    result_scores,
-                    result_metric_names,
-                    row_names=result_dataset_names,
-                )
-
-    # save distribution judgment xlsx after all categories
-    if len(df['Class']) != 0:
-        os.makedirs('./datasets/excel', exist_ok=True)
-        xlsx_path = './datasets/excel/' + dataset_name.split('_')[0] + '_distribution.xlsx'
-        df.to_excel(xlsx_path, index=False)
+            # save results csv after each category
+            print("\n")
+            result_metric_names = list(result_collect[-1].keys())[1:]
+            result_dataset_names = [results["dataset_name"] for results in result_collect]
+            result_scores = [list(results.values())[1:] for results in result_collect]
+            utils.compute_and_store_final_results(
+                run_save_path,
+                result_scores,
+                result_metric_names,
+                row_names=result_dataset_names,
+            )
 
 
 if __name__ == "__main__":
