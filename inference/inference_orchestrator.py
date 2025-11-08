@@ -19,6 +19,8 @@ import time
 import logging
 from typing import List, Dict, Tuple, Optional
 import glob
+import serial
+import threading
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,6 +32,12 @@ from torchvision import transforms
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# Serial Communication Configuration
+SERIAL_PORT = '/dev/ttyUSB0'  # Change to your serial port (e.g., 'COM3' on Windows)
+SERIAL_BAUD_RATE = 115200      # Baud rate for serial communication
+SERIAL_DEFECT_COMMAND = 'stc'  # Command to send when defect is detected
+SERIAL_TIMEOUT = 1.0           # Serial timeout in seconds
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -50,17 +58,154 @@ class ModelCandidate:
     def __str__(self):
         return f"ModelCandidate(class={self.class_name}, avg_score={self.avg_anomaly_score:.4f if self.avg_anomaly_score else 'N/A'})"
 
+class SerialDefectNotifier:
+    """Handles serial communication for defect notifications"""
+    
+    def __init__(self, port: str = SERIAL_PORT, baud_rate: int = SERIAL_BAUD_RATE, 
+                 timeout: float = SERIAL_TIMEOUT):
+        self.port = port
+        self.baud_rate = baud_rate
+        self.timeout = timeout
+        self.serial_connection = None
+        self.is_connected = False
+        self.sent_defect_ids = set()  # Track which defects we've already notified about
+        self.lock = threading.Lock()  # Thread safety for serial operations
+        
+    def connect(self):
+        """Establish serial connection"""
+        try:
+            self.serial_connection = serial.Serial(
+                port=self.port,
+                baudrate=self.baud_rate,
+                timeout=self.timeout,
+                write_timeout=self.timeout
+            )
+            self.is_connected = True
+            logger.info(f"📡 Serial connection established: {self.port} @ {self.baud_rate} baud")
+            return True
+        except serial.SerialException as e:
+            logger.warning(f"⚠️ Failed to connect to serial port {self.port}: {e}")
+            self.is_connected = False
+            return False
+        except Exception as e:
+            logger.error(f"❌ Unexpected error connecting to serial port: {e}")
+            self.is_connected = False
+            return False
+    
+    def disconnect(self):
+        """Close serial connection"""
+        if self.serial_connection and self.is_connected:
+            try:
+                self.serial_connection.close()
+                self.is_connected = False
+                logger.info("📡 Serial connection closed")
+            except Exception as e:
+                logger.warning(f"⚠️ Error closing serial connection: {e}")
+    
+    def send_defect_notification(self, defect_id: str, defect_type: str = "unknown"):
+        """Send defect notification over serial port"""
+        if not self.is_connected or not self.serial_connection:
+            logger.debug(f"Serial not connected, skipping notification for defect {defect_id}")
+            return False
+        
+        # Check if we've already sent notification for this defect
+        with self.lock:
+            if defect_id in self.sent_defect_ids:
+                return True  # Already sent, no need to send again
+            
+            try:                
+                # Send the command
+                self.serial_connection.write(SERIAL_DEFECT_COMMAND.encode('utf-8'))
+                self.serial_connection.flush()  # Ensure data is sent immediately
+                
+                # Mark this defect as notified
+                self.sent_defect_ids.add(defect_id)
+                
+                logger.info(f"📡 Serial notification sent: {SERIAL_DEFECT_COMMAND.strip()}")
+                return True
+                
+            except serial.SerialTimeoutError:
+                logger.warning(f"⚠️ Serial timeout sending notification for defect {defect_id}")
+                return False
+            except serial.SerialException as e:
+                logger.warning(f"⚠️ Serial error sending notification for defect {defect_id}: {e}")
+                # Try to reconnect
+                self.disconnect()
+                if self.connect():
+                    logger.info("📡 Serial reconnection successful, retrying notification")
+                    return self.send_defect_notification(defect_id, defect_type)
+                return False
+            except Exception as e:
+                logger.error(f"❌ Unexpected error sending serial notification: {e}")
+                return False
+    
+    def reset_sent_notifications(self):
+        """Reset the list of sent notifications (useful for new sessions)"""
+        with self.lock:
+            self.sent_defect_ids.clear()
+            logger.debug("📡 Serial notification history reset")
+
 class GLASSInferenceOrchestrator:
     """Orchestrator that automatically selects the best model for a video"""
+    
+    def _log_gpu_info(self):
+        """Log comprehensive GPU information"""
+        logger.info("=" * 60)
+        logger.info("🔍 GPU DETECTION AND SETUP")
+        logger.info("=" * 60)
+        
+        # Check CUDA availability
+        cuda_available = torch.cuda.is_available()
+        logger.info(f"CUDA Available: {cuda_available}")
+        
+        if cuda_available:
+            gpu_count = torch.cuda.device_count()
+            logger.info(f"GPU Count: {gpu_count}")
+            
+            # Log all available GPUs
+            for i in range(gpu_count):
+                gpu_name = torch.cuda.get_device_name(i)
+                gpu_props = torch.cuda.get_device_properties(i)
+                gpu_memory = gpu_props.total_memory / (1024**3)
+                logger.info(f"  GPU {i}: {gpu_name} ({gpu_memory:.1f} GB)")
+        else:
+            logger.warning("No CUDA GPUs detected")
+            
+        # Log PyTorch versions
+        logger.info(f"PyTorch Version: {torch.__version__}")
+        if cuda_available:
+            logger.info(f"CUDA Version: {torch.version.cuda}")
+            logger.info(f"cuDNN Available: {torch.backends.cudnn.is_available()}")
+            if torch.backends.cudnn.is_available():
+                logger.info(f"cuDNN Version: {torch.backends.cudnn.version()}")
+        
+        logger.info("=" * 60)
     
     def __init__(self, 
                  models_base_path: str = "results/models/backbone_0",
                  device: str = 'cuda:0',
                  image_size: int = 384,
-                 sample_frames: int = 30):
+                 sample_frames: int = 30,
+                 enable_serial: bool = True,
+                 serial_port: str = SERIAL_PORT,
+                 serial_baud_rate: int = SERIAL_BAUD_RATE):
         """Initialize the orchestrator"""
         self.models_base_path = models_base_path
+        
+        # GPU Detection and Device Setup
+        self._log_gpu_info()
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        logger.info(f"🔧 Using device: {self.device}")
+        
+        if self.device.type == 'cuda':
+            gpu_name = torch.cuda.get_device_name(self.device)
+            gpu_memory = torch.cuda.get_device_properties(self.device).total_memory / (1024**3)
+            logger.info(f"🚀 GPU: {gpu_name} ({gpu_memory:.1f} GB)")
+            logger.info(f"🔥 CUDA Version: {torch.version.cuda}")
+            logger.info(f"⚡ cuDNN Version: {torch.backends.cudnn.version()}")
+        else:
+            logger.warning("⚠️  Running on CPU - GPU not available or not detected")
+        
         self.image_size = image_size
         self.sample_frames = sample_frames
         
@@ -75,6 +220,29 @@ class GLASSInferenceOrchestrator:
         # Discover available models
         self.available_models = self._discover_models()
         logger.info(f"Found {len(self.available_models)} available models")
+        
+        # Initialize serial communication for defect notifications
+        self.enable_serial = enable_serial
+        self.serial_notifier = None
+        if self.enable_serial:
+            self.serial_notifier = SerialDefectNotifier(
+                port=serial_port,
+                baud_rate=serial_baud_rate
+            )
+            # Try to connect to serial port
+            if self.serial_notifier.connect():
+                logger.info(f"📡 Serial defect notifications enabled: {serial_port} @ {serial_baud_rate} baud")
+            else:
+                logger.warning(f"⚠️ Serial port connection failed, notifications disabled")
+                self.enable_serial = False
+        else:
+            logger.info("📡 Serial defect notifications disabled")
+    
+    def cleanup(self):
+        """Cleanup resources including serial connection"""
+        if self.enable_serial and self.serial_notifier:
+            self.serial_notifier.disconnect()
+            logger.info("📡 Serial connection cleanup completed")
         
     def _discover_models(self) -> List[ModelCandidate]:
         """Discover all available trained models"""
@@ -104,7 +272,19 @@ class GLASSInferenceOrchestrator:
                 logger.debug(f"Found model: {class_dir}")
                 
         return sorted(models, key=lambda x: x.class_name)
-    
+
+    def get_model_by_class_name(self, class_name: str) -> Optional[ModelCandidate]:
+        """Manually get a specific model by class name"""
+        for model in self.available_models:
+            if model.class_name == class_name:
+                logger.info(f"✅ Manually selected model: {class_name}")
+                return model
+
+        # Model not found, show available models
+        available_classes = [m.class_name for m in self.available_models]
+        logger.error(f"❌ Model '{class_name}' not found. Available models: {', '.join(available_classes)}")
+        return None
+
     def _load_glass_model(self, model_candidate: ModelCandidate):
         """Load GLASS model for a specific candidate"""
         if model_candidate.is_loaded:
@@ -161,6 +341,12 @@ class GLASSInferenceOrchestrator:
         model_candidate.glass_model = glass_model
         model_candidate.is_loaded = True
         
+        # Log GPU memory usage after model loading
+        if self.device.type == 'cuda':
+            memory_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
+            memory_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
+            logger.info(f"🧠 GPU Memory - Allocated: {memory_allocated:.2f} GB, Reserved: {memory_reserved:.2f} GB")
+        
         return glass_model
     
     def _predict_frame(self, frame: np.ndarray, model_candidate: ModelCandidate) -> float:
@@ -171,9 +357,21 @@ class GLASSInferenceOrchestrator:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
         
+        # Log GPU tensor transfer
+        if self.device.type == 'cuda':
+            logger.debug(f"⚡ Tensor moved to GPU: {input_tensor.shape} -> {self.device}")
+        
         with torch.no_grad():
+            start_time = time.time()
             image_scores, masks = glass_model._predict(input_tensor)
+            inference_time = time.time() - start_time
             anomaly_score = float(image_scores[0])
+            
+            # Log inference performance
+            if self.device.type == 'cuda':
+                logger.debug(f"🚀 GPU Inference: {inference_time*1000:.1f}ms, Score: {anomaly_score:.4f}")
+            else:
+                logger.debug(f"🐌 CPU Inference: {inference_time*1000:.1f}ms, Score: {anomaly_score:.4f}")
             
         return anomaly_score
     
@@ -423,12 +621,30 @@ class GLASSInferenceOrchestrator:
         logger.info(f"✅ Selected best model: {best_model.class_name} (score: {best_score:.4f})")
         return best_model, selection_report
     
-    def run_inference_with_best_model(self, video_path: str, output_path: str = None) -> Dict:
-        """Run complete inference workflow with automatic model selection"""
+    def run_inference_with_best_model(self, video_path: str, output_path: str = None, manual_class_name: str = None) -> Dict:
+        """Run complete inference workflow with automatic or manual model selection"""
         logger.info("🚀 Starting GLASS Inference Orchestrator")
-        
-        # Step 1: Select best model
-        best_model, selection_report = self.select_best_model(video_path)
+
+        # Step 1: Select model (manual or automatic)
+        if manual_class_name:
+            logger.info(f"🎯 Using manually specified model: {manual_class_name}")
+            best_model = self.get_model_by_class_name(manual_class_name)
+            if best_model is None:
+                raise ValueError(f"Model '{manual_class_name}' not found")
+
+            selection_report = {
+                'timestamp': datetime.now().isoformat(),
+                'video_file': os.path.basename(video_path),
+                'selected_model': {
+                    'class_name': best_model.class_name,
+                    'model_dir': best_model.model_dir
+                },
+                'selection_criteria': 'manual_selection',
+                'frames_sampled': 0
+            }
+        else:
+            # Automatic selection
+            best_model, selection_report = self.select_best_model(video_path)
         
         # Step 2: Run full inference with selected model
         logger.info(f"Running full inference with model: {best_model.class_name}")
@@ -443,7 +659,8 @@ class GLASSInferenceOrchestrator:
             device=str(self.device),
             image_size=self.image_size,
             save_defect_frames=True,
-            use_organized_output=True
+            use_organized_output=True,
+            serial_notifier=self.serial_notifier if self.enable_serial else None
         )
         
         # Run inference
@@ -454,9 +671,10 @@ class GLASSInferenceOrchestrator:
             'orchestrator_info': {
                 'timestamp': datetime.now().isoformat(),
                 'video_file': os.path.basename(video_path),
-                'models_evaluated': len(self.available_models),
+                'models_evaluated': len(self.available_models) if not manual_class_name else 1,
                 'selected_model': best_model.class_name,
-                'selection_score': best_model.avg_anomaly_score
+                'selection_score': best_model.avg_anomaly_score,
+                'selection_mode': 'manual' if manual_class_name else 'automatic'
             },
             'model_selection': selection_report,
             'inference_results': inference_results
@@ -474,16 +692,35 @@ class GLASSInferenceOrchestrator:
         
         return orchestrator_results
     
-    def run_inference_with_camera(self, camera_id: int, camera_fps: int = 30, 
-                                 duration_seconds: Optional[int] = None, 
+    def run_inference_with_camera(self, camera_id: int, camera_fps: int = 30,
+                                 duration_seconds: Optional[int] = None,
                                  skip_model_selection: bool = False,
+                                 manual_class_name: str = None,
                                  output_path: str = None) -> Dict:
         """Run complete inference workflow with camera input"""
         logger.info(f"🚀 Starting GLASS Camera Inference Orchestrator")
         logger.info(f"📹 Camera: {camera_id}, FPS: {camera_fps}, Duration: {duration_seconds or 'continuous'}")
-        
-        # Step 1: Model selection (or skip)
-        if skip_model_selection:
+
+        # Step 1: Model selection (manual, skip, or automatic)
+        if manual_class_name:
+            # Manual model selection
+            logger.info(f"🎯 Using manually specified model: {manual_class_name}")
+            best_model = self.get_model_by_class_name(manual_class_name)
+            if best_model is None:
+                raise ValueError(f"Model '{manual_class_name}' not found")
+
+            selection_report = {
+                'timestamp': datetime.now().isoformat(),
+                'input_source': f'camera_{camera_id}',
+                'camera_fps': camera_fps,
+                'selected_model': {
+                    'class_name': best_model.class_name,
+                    'model_dir': best_model.model_dir
+                },
+                'selection_criteria': 'manual_selection',
+                'frames_sampled': 0
+            }
+        elif skip_model_selection:
             if not self.available_models:
                 raise RuntimeError("No models available")
             best_model = self.available_models[0]
@@ -522,7 +759,8 @@ class GLASSInferenceOrchestrator:
             device=str(self.device),
             image_size=self.image_size,
             save_defect_frames=True,
-            use_organized_output=True
+            use_organized_output=True,
+            serial_notifier=self.serial_notifier if self.enable_serial else None
         )
         
         # Run camera inference
@@ -534,15 +772,17 @@ class GLASSInferenceOrchestrator:
         )
         
         # Combine results
+        selection_mode = 'manual' if manual_class_name else ('skip' if skip_model_selection else 'automatic')
         orchestrator_results = {
             'orchestrator_info': {
                 'timestamp': datetime.now().isoformat(),
                 'input_source': f'camera_{camera_id}',
                 'camera_fps': camera_fps,
                 'duration_seconds': duration_seconds,
-                'models_evaluated': len(self.available_models) if not skip_model_selection else 1,
+                'models_evaluated': len(self.available_models) if not (skip_model_selection or manual_class_name) else 1,
                 'selected_model': best_model.class_name,
-                'selection_score': getattr(best_model, 'avg_anomaly_score', None)
+                'selection_score': getattr(best_model, 'avg_anomaly_score', None),
+                'selection_mode': selection_mode
             },
             'model_selection': selection_report,
             'inference_results': inference_results
@@ -590,16 +830,26 @@ def main():
     parser.add_argument('--camera_fps', type=int, default=30, help='Camera FPS for recording (default: 30)')
     parser.add_argument('--duration_seconds', type=int, help='Duration to record from camera (default: continuous)')
     parser.add_argument('--output_path', type=str, help='Output video path (optional with organized output)')
-    parser.add_argument('--models_path', type=str, default='results/models/backbone_0', 
+    parser.add_argument('--models_path', type=str, default='results/models/backbone_0',
                        help='Path to models directory')
+    parser.add_argument('--class_name', type=str,
+                       help='Manually specify model class name (bypasses automatic selection)')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device to use')
     parser.add_argument('--image_size', type=int, default=384, help='Model input image size')
-    parser.add_argument('--sample_frames', type=int, default=30, 
+    parser.add_argument('--sample_frames', type=int, default=30,
                        help='Number of frames to sample for model evaluation')
-    parser.add_argument('--skip_model_selection', action='store_true', 
+    parser.add_argument('--skip_model_selection', action='store_true',
                        help='Skip automatic model selection and use first available model')
-    parser.add_argument('--list_models', action='store_true', 
+    parser.add_argument('--list_models', action='store_true',
                        help='List available models and exit')
+    
+    # Serial communication arguments
+    parser.add_argument('--disable_serial', action='store_true',
+                       help='Disable serial defect notifications')
+    parser.add_argument('--serial_port', type=str, default=SERIAL_PORT,
+                       help=f'Serial port for defect notifications (default: {SERIAL_PORT})')
+    parser.add_argument('--serial_baud_rate', type=int, default=SERIAL_BAUD_RATE,
+                       help=f'Serial baud rate (default: {SERIAL_BAUD_RATE})')
     
     args = parser.parse_args()
     
@@ -608,7 +858,10 @@ def main():
         models_base_path=args.models_path,
         device=args.device,
         image_size=args.image_size,
-        sample_frames=args.sample_frames
+        sample_frames=args.sample_frames,
+        enable_serial=not args.disable_serial,
+        serial_port=args.serial_port,
+        serial_baud_rate=args.serial_baud_rate
     )
     
     # List models if requested
@@ -657,6 +910,7 @@ def main():
                 camera_fps=args.camera_fps,
                 duration_seconds=args.duration_seconds,
                 skip_model_selection=args.skip_model_selection,
+                manual_class_name=args.class_name,
                 output_path=args.output_path
             )
             
@@ -670,6 +924,7 @@ def main():
             else:
                 print(f"⏱️  Duration: Continuous (until stopped)")
             print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
+            print(f"🎲 Selection Mode: {results['orchestrator_info']['selection_mode']}")
             if results['orchestrator_info']['selection_score']:
                 print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
             print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
@@ -683,7 +938,8 @@ def main():
             # Run video inference
             results = orchestrator.run_inference_with_best_model(
                 video_path=args.video_path,
-                output_path=args.output_path
+                output_path=args.output_path,
+                manual_class_name=args.class_name
             )
             
             # Print video summary
@@ -692,7 +948,9 @@ def main():
             print("="*60)
             print(f"📹 Video: {os.path.basename(args.video_path)}")
             print(f"🏆 Selected Model: {results['orchestrator_info']['selected_model']}")
-            print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
+            print(f"🎲 Selection Mode: {results['orchestrator_info']['selection_mode']}")
+            if results['orchestrator_info']['selection_score']:
+                print(f"📊 Selection Score: {results['orchestrator_info']['selection_score']:.4f}")
             print(f"🔍 Models Evaluated: {results['orchestrator_info']['models_evaluated']}")
             print(f"🎭 Unique Defects Found: {results['inference_results']['unique_defects']}")
             print(f"⚡ Processing FPS: {results['inference_results']['fps_processing']:.1f}")
@@ -701,6 +959,9 @@ def main():
     except Exception as e:
         logger.error(f"Orchestrator failed: {e}")
         raise
+    finally:
+        # Cleanup resources
+        orchestrator.cleanup()
 
 
 if __name__ == '__main__':

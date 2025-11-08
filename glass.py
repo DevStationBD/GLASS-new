@@ -189,9 +189,25 @@ class GLASS(torch.nn.Module):
         state_dict = {}
         ckpt_path = glob.glob(self.ckpt_dir + '/ckpt_best*')
         ckpt_path_save = os.path.join(self.ckpt_dir, "ckpt.pth")
+
+        # Delete existing checkpoints to retrain from scratch
         if len(ckpt_path) != 0:
-            LOGGER.info("Start testing, ckpt file found!")
-            return 0., 0., 0., 0., 0., -1.
+            LOGGER.info(f"Found existing checkpoint(s): {len(ckpt_path)} file(s). Deleting and retraining...")
+            for old_ckpt in ckpt_path:
+                os.remove(old_ckpt)
+                LOGGER.info(f"Deleted: {old_ckpt}")
+
+        # Also delete ckpt.pth if it exists
+        if os.path.exists(ckpt_path_save):
+            os.remove(ckpt_path_save)
+            LOGGER.info(f"Deleted: {ckpt_path_save}")
+
+        # Clean up TensorBoard logs for fresh training
+        if os.path.exists(self.tb_dir):
+            shutil.rmtree(self.tb_dir)
+            os.makedirs(self.tb_dir, exist_ok=True)
+            self.logger = TBWrapper(self.tb_dir)
+            LOGGER.info(f"Cleaned TensorBoard logs: {self.tb_dir}")
 
         def update_state_dict():
             state_dict["discriminator"] = OrderedDict({
@@ -244,7 +260,24 @@ class GLASS(torch.nn.Module):
             self.svd = utils.distribution_judge(avg_img, name)
             os.makedirs(f'./results/judge/avg/{self.svd}', exist_ok=True)
             cv2.imwrite(f'./results/judge/avg/{self.svd}/{name}.png', avg_img)
-            return self.svd
+
+            # Save distribution result to Excel file immediately
+            os.makedirs('./datasets/excel', exist_ok=True)
+            distribution_data = {'Class': [name], 'Distribution': [self.svd], 'Foreground': [self.svd]}
+            df_new = pd.DataFrame(distribution_data)
+
+            if os.path.exists(xlsx_path):
+                df_existing = pd.read_excel(xlsx_path)
+                # Remove existing entry for this class if it exists
+                df_existing = df_existing[df_existing['Class'] != name]
+                # Append new entry
+                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                df_combined.to_excel(xlsx_path, index=False)
+            else:
+                df_new.to_excel(xlsx_path, index=False)
+
+            LOGGER.info(f"Distribution analysis complete: {name} → {'Hypersphere' if self.svd == 1 else 'Manifold'} (svd={self.svd})")
+            LOGGER.info(f"Saved to {xlsx_path}, continuing to training...")
 
         pbar = tqdm.tqdm(range(self.meta_epochs), unit='epoch')
         pbar_str1 = ""

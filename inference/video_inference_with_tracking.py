@@ -54,7 +54,8 @@ class VideoInferenceWithTracking:
                  fabric_speed_estimate: float = 5.0,
                  save_defect_frames: bool = True,
                  use_organized_output: bool = True,
-                 show_preview: bool = True):
+                 show_preview: bool = True,
+                 serial_notifier=None):
         """Initialize tracking-enabled video inference"""
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.class_name = class_name
@@ -65,6 +66,10 @@ class VideoInferenceWithTracking:
         self.save_defect_frames = save_defect_frames
         self.use_organized_output = use_organized_output
         self.show_preview = show_preview
+        
+        # Serial communication for defect notifications
+        self.serial_notifier = serial_notifier
+        self.notified_defect_ids = set()  # Track which defects we've already notified about
         
         # Initialize organized output directories
         self.output_base_dir = None
@@ -231,6 +236,29 @@ class VideoInferenceWithTracking:
             
         # Clean up completed tracks immediately
         self._save_and_cleanup_completed_tracks()
+    
+    def _send_serial_notifications_for_new_defects(self, active_tracks: list):
+        """Send serial notifications for newly detected unique defects"""
+        if not self.serial_notifier or not active_tracks:
+            return
+        
+        for track in active_tracks:
+            track_id = track.track_id
+            
+            # Only send notification for new defects (not already notified)
+            if track_id not in self.notified_defect_ids:
+                # Get defect type from track (default to "unknown" if not available)
+                defect_type = getattr(track, 'defect_type', 'unknown')
+                
+                # Send serial notification
+                success = self.serial_notifier.send_defect_notification(track_id, defect_type)
+                
+                if success:
+                    # Mark this defect as notified
+                    self.notified_defect_ids.add(track_id)
+                    logger.debug(f"📡 Serial notification sent for new defect: {track_id} (type: {defect_type})")
+                else:
+                    logger.warning(f"⚠️ Failed to send serial notification for defect: {track_id}")
     
     def _cleanup_oldest_stored_frames(self):
         """Remove oldest stored frames to free memory"""
@@ -540,6 +568,9 @@ class VideoInferenceWithTracking:
                 active_tracks = self.defect_tracker.process_frame(frame, anomaly_map, fabric_motion)
                 active_tracks_history.append(len(active_tracks))
                 
+                # Send serial notifications for new unique defects
+                self._send_serial_notifications_for_new_defects(active_tracks)
+                
                 # Save defect frames if enabled
                 self._save_defect_frames(frame, active_tracks, frame_count, anomaly_map)
                 
@@ -707,6 +738,9 @@ class VideoInferenceWithTracking:
                 # Update defect tracker
                 active_tracks = self.defect_tracker.process_frame(frame, anomaly_map, fabric_motion)
                 active_tracks_history.append(len(active_tracks))
+                
+                # Send serial notifications for new unique defects
+                self._send_serial_notifications_for_new_defects(active_tracks)
                 
                 # Save defect frames if needed
                 self._save_defect_frames(frame, active_tracks, frame_count, anomaly_map)
