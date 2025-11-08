@@ -15,15 +15,21 @@ TRAINING_EPOCHS = 10  # Number of training epochs (adjust for your model)
 SIMULATION_TRAIN_TIME = 12  # Seconds to simulate training
 
 # Dataset Settings
-DATASETS_DIR = "datasets"
+DATASETS_DIR = "raw_data"
 INFERENCE_DIR = "inference"
 IMAGE_FORMAT = "png"
-
+SERVER_DATASETS_DIR = "/root/TrainingHost/GLASS-new/raw-data"
+SERVER_SSH_KEY = "/root/.ssh/id_rsa"
+SERVER_IP = "139.59.4.173"
+SERVER_TRAINING_API = "http://139.59.4.173:5000/api/start-training"
+SERVER_MODELS_API = "http://139.59.4.173:5000/api/models"
+SERVER_RESULTS_DIR = "/root/TrainingHost/GLASS-new/results"
+MODEL_SYNC_INTERVAL = 300  # Sync models every 5 minutes (300 seconds)
 # Inference Settings
 INFERENCE_FPS = 10  # Frames per second during inference
 AUTO_DETECT_SIMILARITY_THRESHOLD = 0.6  # Threshold for model auto-detection
 
-# Serial Port Settings
+# Serial Port Settings for Custom Input Device
 SERIAL_ENABLED = False  # Set to True to enable serial port listening
 SERIAL_PORT = "/dev/ttyUSB0"  # Serial port device (Linux: /dev/ttyUSB0, Windows: COM3)
 SERIAL_BAUDRATE = 9600  # Baud rate

@@ -164,6 +164,11 @@ class FabricInspector:
         self.training_in_progress = False
         self.training_logs = []
         
+        # Upload state
+        self.upload_in_progress = False
+        self.upload_status = ""
+        self.upload_complete = False
+        
         # Review state
         self.review_index = 0
         self.images_to_discard = set()
@@ -173,6 +178,11 @@ class FabricInspector:
         self.available_models = []
         self.model_previews = {}
         self.model_selection_index = 0
+        
+        # Model sync state
+        self.model_sync_thread = None
+        self.model_sync_running = True
+        self.last_model_sync = 0
         
         # UI state
         self.window_name = "Fabric Inspector"
@@ -225,6 +235,12 @@ class FabricInspector:
         if self.serial_listener:
             self.serial_listener.start()
         
+        # Start model sync thread
+        self.model_sync_running = True
+        self.model_sync_thread = threading.Thread(target=self.sync_models_loop, daemon=True)
+        self.model_sync_thread.start()
+        print("Model sync thread started (5-minute interval)")
+        
         self.run_main_loop()
     
     def handle_serial_command(self, command):
@@ -270,6 +286,8 @@ class FabricInspector:
                     frame = self.draw_model_selection()
                 elif self.mode == "review":
                     frame = self.draw_review()
+                elif self.mode == "upload":
+                    frame = self.draw_upload_status()
                 else:
                     frame = self.draw_menu()
                 
@@ -340,11 +358,18 @@ class FabricInspector:
                 self.review_previous_image()
             elif key_char == 'd' or key_char == 'D':
                 self.review_discard_current()
-            elif key_char == 'c' or key_char == 'C':
+            elif key_char == 's' or key_char == 'S':
                 self.review_confirm_submit()
             elif key_char == 'b' or key_char == 'B':
                 self.mode = "training"
                 self.images_to_discard.clear()
+        
+        elif self.mode == "upload":
+            if key_char == 'm' or key_char == 'M':
+                self.mode = "menu"
+                self.upload_in_progress = False
+                self.upload_complete = False
+                self.upload_status = ""
         
         return True  # Continue main loop
     
@@ -369,8 +394,10 @@ class FabricInspector:
         model_count = 0
         if models_dir.exists():
             model_dirs = [p for p in models_dir.iterdir() if p.is_dir() and not p.name.startswith('.')]
-            model_count = len(model_dirs)
-            logger.debug(f"Menu: Found {model_count} models in {models_dir}: {[p.name for p in model_dirs]}")
+            new_model_count = len(model_dirs)
+            if new_model_count != model_count:
+                logger.debug(f"Menu: Found {new_model_count} models in {models_dir}: {[p.name for p in model_dirs]}")
+            model_count = new_model_count
         else:
             logger.warning(f"Menu: Models directory does not exist: {models_dir}")
         
@@ -584,7 +611,7 @@ class FabricInspector:
             return
         
         # Create dataset directory
-        dataset_dir = Path(config.DATASETS_DIR) / f"batch_{self.batch_id}"
+        dataset_dir = Path(config.DATASETS_DIR) / f"batch_{self.batch_id}/good-images"
         dataset_dir.mkdir(parents=True, exist_ok=True)
         
         # Save image with high quality settings
@@ -754,6 +781,74 @@ class FabricInspector:
         
         return frame
     
+    def draw_upload_status(self):
+        """Draw upload and training status screen"""
+        frame = np.zeros((self.screen_height, self.screen_width, 3), dtype=np.uint8)
+        
+        # Title
+        title_color = (0, 255, 0) if self.upload_complete else (0, 255, 255)
+        title = "UPLOAD COMPLETE. TRAINING Started..." if self.upload_complete else "UPLOADING DATASET & TRAINING"
+        cv2.putText(frame, title, (150, 100), 
+                    cv2.FONT_HERSHEY_DUPLEX, 1.5, title_color, 3)
+        
+        # Status display area
+        y = 250
+        
+        # Main status message
+        status_color = (0, 255, 0) if "✅" in self.upload_status else (0, 0, 255) if "❌" in self.upload_status else (0, 255, 255)
+        cv2.putText(frame, self.upload_status, (200, y), 
+                    cv2.FONT_HERSHEY_DUPLEX, 1.2, status_color, 2)
+        
+        y += 100
+        
+        # Batch ID
+        batch_text = f"Batch ID: {self.batch_id}"
+        cv2.putText(frame, batch_text, (250, y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+        
+        y += 60
+        
+        # Images count
+        images_text = f"Images Processed: {self.capture_count}"
+        cv2.putText(frame, images_text, (250, y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+        
+        # Progress indicator
+        if self.upload_in_progress:
+            y = 500
+            # Animated progress indicator
+            import time
+            progress_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            char_index = int(time.time() * 10) % len(progress_chars)
+            progress_text = f"{progress_chars[char_index]} Processing..."
+            cv2.putText(frame, progress_text, (420, y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        
+        # Recent logs
+        y = 600
+        cv2.putText(frame, "Recent Activity:", (50, y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        
+        y += 40
+        log_color = (100, 255, 100)
+        for log_msg in self.training_logs[-4:]:
+            cv2.putText(frame, log_msg[:80], (70, y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, log_color, 1)
+            y += 30
+        
+        # Instructions
+        if self.upload_complete:
+            instructions = "Press 'M' to return to Menu"
+            instructions_color = (0, 255, 0)
+        else:
+            instructions = "Processing in progress... Press 'M' to cancel and return to Menu"
+            instructions_color = (0, 255, 255)
+        
+        cv2.putText(frame, instructions, (300, self.screen_height - 50), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, instructions_color, 2)
+        
+        return frame
+    
     def review_next_image(self):
         """Navigate to next image in review"""
         if self.review_index < len(self.captured_images) - 1:
@@ -809,20 +904,103 @@ class FabricInspector:
         # Update capture count
         self.capture_count = len(self.captured_images)
         
-        print(f"\nStarting training with {self.capture_count} images (discarded {discarded_count})...")
-        self.training_logs.append(f"Training with {self.capture_count} images...")
-        self.training_in_progress = True
+        print(f"\nStarting dataset upload with {self.capture_count} images (discarded {discarded_count})...")
+        self.training_logs.append(f"Uploading dataset with {self.capture_count} images...")
         
         # Clear review state
         self.images_to_discard.clear()
         self.review_index = 0
         
-        # Return to training mode display during training
-        self.mode = "train"
+        # Switch to upload mode
+        self.mode = "upload"
+        self.upload_in_progress = True
+        self.upload_complete = False
+        self.upload_status = "Initializing upload..."
         
-        # Run training in thread
-        thread = threading.Thread(target=self.run_training, daemon=True)
+        # Run upload in thread
+        thread = threading.Thread(target=self.run_upload_and_training, daemon=True)
         thread.start()
+    
+    def run_upload_and_training(self):
+        """Upload dataset to server and then trigger training via API"""
+        try:
+            import requests
+            
+            # First, upload to server
+            self.upload_status = "Uploading dataset to server..."
+            local_dataset_dir = str(Path(config.DATASETS_DIR) / f"batch_{self.batch_id}")
+            remote_path = f"root@{config.SERVER_IP}:{config.SERVER_DATASETS_DIR}/batch_{self.batch_id}"
+            ssh_key = config.SERVER_SSH_KEY
+            
+            rsync_cmd = [
+                "rsync", "-avz", "-e",
+                f"ssh -i {ssh_key}",
+                local_dataset_dir + "/",  # trailing slash to copy contents
+                remote_path
+            ]
+            
+            print(f"\n📤 Uploading dataset to server: {remote_path}")
+            self.training_logs.append(f"Uploading to: {remote_path}")
+            
+            result = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=300000)
+            if result.returncode == 0:
+                self.upload_status = "✅ Dataset uploaded successfully!"
+                print("✅ Dataset uploaded to server successfully.")
+                self.training_logs.append("✅ Dataset uploaded to server.")
+            else:
+                self.upload_status = f"❌ Upload failed: {result.stderr[:100]}"
+                print(f"❌ Rsync failed: {result.stderr}")
+                self.training_logs.append(f"❌ Upload failed: {result.stderr}")
+                self.upload_complete = True
+                self.upload_in_progress = False
+                return
+            
+            # Now trigger training on server via API
+            self.upload_status = "Starting training on server..."
+            self.training_logs.append("Triggering server training...")
+            print(f"\n🚀 Triggering training on server...")
+            
+            api_url = config.SERVER_TRAINING_API
+            payload = {
+                "class_name": f"batch_{self.batch_id}"
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            print(f"POST {api_url}")
+            print(f"Payload: {payload}")
+            
+            response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                self.upload_status = "✅ Training started on server!"
+                print(f"✅ Training API response: {response.status_code}")
+                self.training_logs.append(f"✅ Training started on server - API responded with {response.status_code}")
+                print(f"Response: {response.text}")
+            else:
+                self.upload_status = f"❌ Training API error: {response.status_code}"
+                print(f"❌ Training API error: {response.status_code}")
+                self.training_logs.append(f"❌ Training API error: {response.status_code}")
+                print(f"Response: {response.text}")
+        
+        except subprocess.TimeoutExpired:
+            self.upload_status = "❌ Upload timeout (> 5 minutes)"
+            self.training_logs.append("Upload timeout")
+            print("❌ Upload timeout")
+        except requests.exceptions.RequestException as e:
+            self.upload_status = f"❌ API Error: {str(e)[:80]}"
+            self.training_logs.append(f"API Error: {str(e)}")
+            print(f"❌ API Error: {e}")
+        except Exception as e:
+            self.upload_status = f"❌ Error: {str(e)[:80]}"
+            self.training_logs.append(f"Error: {str(e)}")
+            print(f"❌ Error: {e}")
+        
+        finally:
+            self.upload_in_progress = False
+            self.upload_complete = True
+            print("\nUpload and training trigger complete.")
     
     def start_testing_mode(self):
         """Initialize testing mode - start with model selection"""
@@ -940,13 +1118,14 @@ class FabricInspector:
         
         # Models are inside the backbone_0 directory
         models_dir = Path(GLASS_MODEL_PATH)
-        eval_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / 'results' / 'eval'
+        # Preview images are in results/judge/avg/0
+        judge_dir = Path("results") / "judge" / "avg" / "0"
         
         logger.debug(f"GLASS_MODEL_PATH: {GLASS_MODEL_PATH}")
         logger.debug(f"Models directory: {models_dir}")
         logger.debug(f"Models directory exists: {models_dir.exists()}")
-        logger.debug(f"Eval directory: {eval_dir}")
-        logger.debug(f"Eval directory exists: {eval_dir.exists()}")
+        logger.debug(f"Judge directory: {judge_dir}")
+        logger.debug(f"Judge directory exists: {judge_dir.exists()}")
         
         self.available_models = []
         self.model_previews = {}
@@ -961,20 +1140,19 @@ class FabricInspector:
                     logger.info(f"Found model: {model_name}")
                     self.available_models.append(model_name)
                     
-                    # Look for corresponding preview image in eval folder
-                    eval_model_dir = eval_dir / model_name
+                    # Look for corresponding preview image in results/judge/avg/0
                     preview_image = None
                     
-                    logger.debug(f"Looking for preview in: {eval_model_dir}")
-                    if eval_model_dir.exists():
-                        # Find first image file in the eval directory
-                        for img_file in eval_model_dir.iterdir():
-                            if img_file.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp']:
-                                preview_image = str(img_file)
-                                logger.debug(f"Found preview image: {preview_image}")
-                                break
+                    if judge_dir.exists():
+                        # Look for image file with model name
+                        preview_path = judge_dir / f"{model_name}.png"
+                        if preview_path.exists():
+                            preview_image = str(preview_path)
+                            logger.debug(f"Found preview image: {preview_image}")
+                        else:
+                            logger.debug(f"No preview image found for model: {model_name} at {preview_path}")
                     else:
-                        logger.debug(f"No eval directory found for model: {model_name}")
+                        logger.debug(f"Judge directory not found: {judge_dir}")
                     
                     self.model_previews[model_name] = preview_image
         else:
@@ -1294,6 +1472,11 @@ class FabricInspector:
     
     def cleanup(self):
         """Clean up resources"""
+        # Stop model sync thread
+        self.model_sync_running = False
+        if self.model_sync_thread:
+            self.model_sync_thread.join(timeout=2)
+        
         if self.camera and self.camera.isOpened():
             self.camera.release()
         
@@ -1302,6 +1485,77 @@ class FabricInspector:
         
         cv2.destroyAllWindows()
         print("\nFabric Inspector closed. Goodbye!")
+    
+    def sync_models_loop(self):
+        """Background thread to sync models every 5 minutes"""
+        import time
+        
+        while self.model_sync_running:
+            try:
+                current_time = time.time()
+                if current_time - self.last_model_sync >= config.MODEL_SYNC_INTERVAL:
+                    self.sync_models_from_server()
+                    self.last_model_sync = current_time
+            except Exception as e:
+                logger.error(f"Error in model sync loop: {e}")
+            
+            # Sleep in small intervals to allow quick shutdown
+            time.sleep(1)
+    
+    def sync_models_from_server(self):
+        """Fetch available models from server and rsync results folder back"""
+        try:
+            import requests
+            
+            logger.info("📡 Syncing models from server...")
+            
+            # Call the models API
+            api_url = config.SERVER_MODELS_API
+            response = requests.get(api_url, timeout=10)
+            
+            if response.status_code != 200:
+                logger.warning(f"Failed to fetch models: {response.status_code}")
+                return
+            
+            models_data = response.json()
+            model_count = models_data.get('count', 0)
+            models = models_data.get('models', [])
+            
+            logger.debug(f"Server has {model_count} models available")
+            
+            if model_count == 0:
+                logger.debug("No models available on server")
+                return
+            
+            # Rsync results folder back to local
+            logger.info(f"📥 Syncing results folder from server...")
+            local_results_dir = Path("results")
+            local_results_dir.mkdir(exist_ok=True)
+            
+            remote_path = f"root@{config.SERVER_IP}:{config.SERVER_RESULTS_DIR}/"
+            ssh_key = config.SERVER_SSH_KEY
+            
+            rsync_cmd = [
+                "rsync", "-avz", "--delete", "-e",
+                f"ssh -i {ssh_key}",
+                remote_path,
+                str(local_results_dir) + "/"
+            ]
+            
+            result = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0:
+                logger.info(f"✅ Models synced successfully ({model_count} models available)")
+                logger.debug(f"Models: {[m['name'] for m in models]}")
+            else:
+                logger.warning(f"⚠️  Rsync results failed: {result.stderr}")
+        
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Failed to connect to models API: {e}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Model sync rsync timeout")
+        except Exception as e:
+            logger.error(f"Error syncing models: {e}")
 
 
 def main():
