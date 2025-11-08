@@ -787,7 +787,7 @@ class FabricInspector:
         
         # Title
         title_color = (0, 255, 0) if self.upload_complete else (0, 255, 255)
-        title = "UPLOAD & TRAINING COMPLETE" if self.upload_complete else "UPLOADING DATASET & TRAINING"
+        title = "UPLOAD COMPLETE. TRAINING Started..." if self.upload_complete else "UPLOADING DATASET & TRAINING"
         cv2.putText(frame, title, (150, 100), 
                     cv2.FONT_HERSHEY_DUPLEX, 1.5, title_color, 3)
         
