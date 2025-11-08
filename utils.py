@@ -33,16 +33,24 @@ def distribution_judge(img, name):
     y_indices, x_indices = np.where(magnitude == 255)
     y_all, x_all = np.indices((2 * height, 2 * width))
 
-    l1_dist_x = np.abs(x_indices - center[1])
-    l1_dist_y = np.abs(y_indices - center[0])
+    # Handle case where no high-magnitude pixels are found (uniform images)
+    if len(x_indices) == 0:
+        side_x = 1
+        side_y = 1
+        radius = 1
+        points_num = 0
+    else:
+        l1_dist_x = np.abs(x_indices - center[1])
+        l1_dist_y = np.abs(y_indices - center[0])
 
-    dist = np.sqrt((x_indices - center[1]) ** 2 + (y_indices - center[0]) ** 2)
+        dist = np.sqrt((x_indices - center[1]) ** 2 + (y_indices - center[0]) ** 2)
+        
+        side_x = np.max(l1_dist_x)
+        side_y = np.max(l1_dist_y)
+        radius = np.max(dist)
+        points_num = len(dist)
+    
     l2_dist_all = np.sqrt((x_all - center[1]) ** 2 + (y_all - center[0]) ** 2)
-
-    side_x = np.max(l1_dist_x)
-    side_y = np.max(l1_dist_y)
-    radius = np.max(dist)
-    points_num = len(dist)
 
     l1_density = points_num / (4 * np.max([side_x, 1]) * np.max([side_y, 1]))
     l2_density = points_num / (np.sum(l2_dist_all <= radius) + 1e-10)

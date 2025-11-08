@@ -8,8 +8,17 @@ set -e
 # Get class name from parameter or use default
 CLASS_NAME="${1:-mvt2}"
 
+# Setup CUDA environment
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH
+export CUDA_HOME=/usr/local/cuda
+export PATH=$CUDA_HOME/bin:$PATH
+export CUDA_LAUNCH_BLOCKING=1
+
 echo "🚀 Training GLASS on Custom Fabric Dataset (per class)..."
 echo "========================================================"
+echo "CUDA_HOME: $CUDA_HOME"
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+echo ""
 
 # Dataset configuration
 datapath=~/GLASS-new/datasets/custom
