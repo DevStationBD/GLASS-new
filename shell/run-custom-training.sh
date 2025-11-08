@@ -5,14 +5,16 @@
 
 set -e
 
+# Get class name from parameter or use default
+CLASS_NAME="${1:-mvt2}"
+
 echo "🚀 Training GLASS on Custom Fabric Dataset (per class)..."
 echo "========================================================"
 
 # Dataset configuration
-datapath=/home/arif/Projects/GLASS-new/datasets/custom
-augpath=/home/arif/Projects/GLASS-new/datasets/dtd/images
-#classes=('grid' 'grid-original')   # Add more class names here
-classes=('denim')   # Add more class names here
+datapath=~/GLASS-new/datasets/custom
+augpath=~/GLASS-new/datasets/dtd/images
+classes=("$CLASS_NAME")   # Use parameter as class name
 
 # Check dataset root
 if [ ! -d "$datapath" ]; then
@@ -64,16 +66,13 @@ for cls in "${classes[@]}"; do
     echo "   Total defect images: $total_defect_count"
 done
 
-# Confirmation
-read -p "Continue with GLASS training for each class separately? (y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "❌ Training cancelled."
-    exit 1
-fi
+# Auto-proceed for automated training (no user interaction needed)
+echo ""
+echo "✅ Validation complete. Proceeding with GLASS training..."
+echo ""
 
 # Training loop
-cd /home/arif/Projects/GLASS-new
+cd ~/GLASS-new
 for cls in "${classes[@]}"; do
     echo ""
     echo "🚀 Training GLASS on class: $cls"
@@ -107,7 +106,7 @@ for cls in "${classes[@]}"; do
         --std 0.1 \
         --fg 0 \
         --rand_aug 1 \
-        --batch_size 10 \
+        --batch_size 32 \
         --resize 384 \
         --imagesize 384 -d "$cls" mvtec $datapath $augpath
         # Image size options (preserves aspect ratio):
