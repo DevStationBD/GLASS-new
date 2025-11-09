@@ -98,7 +98,7 @@ for cls in "${classes[@]}"; do
         --pretrain_embed_dimension 1536 \
         --target_embed_dimension 1536 \
         --patchsize 3 \
-        --meta_epochs 640 \
+        --meta_epochs 100 \
         --eval_epochs 10 \
         --dsc_layers 2 \
         --dsc_hidden 1024 \
