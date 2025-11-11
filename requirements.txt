@@ -1,6 +1,6 @@
 # Core dependencies
 click==8.1.7
-numpy==1.26.3
+numpy==1.23.5
 pandas==1.5.2
 scipy==1.11.4
 tqdm==4.66.1
@@ -11,17 +11,17 @@ pillow==10.2.0
 scikit-image==0.22.0
 imgaug==0.4.0
 
-# Machine Learning and Deep Learning (CUDA 12.1 builds for H100 GPU)
-# Note: Explicit CUDA versions ensure proper GPU support
-torch==2.1.2+cu121
-torchvision==0.16.2+cu121
+# Machine Learning and Deep Learning
+# torch==2.1.2+cu121
+# torchvision==0.16.2+cu121
 scikit-learn==1.4.0
 timm==0.9.12
 
 # ONNX Runtime and Optimization
-onnx==1.16.2
-onnxruntime-gpu==1.18.1
-onnxsim==0.4.36
+# install separately on jetson
+# onnx==1.16.2
+# onnxruntime-gpu==1.18.1
+# onnxsim==0.4.36
 
 # Visualization and Monitoring
 matplotlib==3.8.2
@@ -40,4 +40,5 @@ psutil==5.9.8  # For memory and CPU monitoring
 reportlab==4.0.7
 
 # CUDA Support (optional)
-cuda-python==11.8.2
+# install separately on jetson
+# cuda-python==11.8.2
